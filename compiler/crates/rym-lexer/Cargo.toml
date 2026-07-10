@@ -1,0 +1,12 @@
+[package]
+name        = "rym-lexer"
+description = "Rym 语言词法分析器"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+thiserror = { workspace = true }
+miette    = { workspace = true }

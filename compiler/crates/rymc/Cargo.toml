@@ -1,0 +1,22 @@
+[package]
+name        = "rymc"
+description = "Rym 语言编译器 CLI"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[[bin]]
+name = "rymc"
+path = "src/main.rs"
+
+[dependencies]
+rym-lexer   = { workspace = true }
+rym-ast     = { workspace = true }
+rym-parser  = { workspace = true }
+rym-sema    = { workspace = true }
+rym-ir      = { workspace = true }
+rym-codegen = { workspace = true }
+clap        = { workspace = true }
+miette      = { workspace = true }

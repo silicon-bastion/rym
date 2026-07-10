@@ -1,0 +1,12 @@
+[package]
+name        = "rym-codegen"
+description = "Rym LoongArch64 代码生成后端"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+rym-ir    = { workspace = true }
+thiserror = { workspace = true }

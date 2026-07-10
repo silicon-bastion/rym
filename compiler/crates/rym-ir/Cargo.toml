@@ -1,0 +1,12 @@
+[package]
+name        = "rym-ir"
+description = "Rym 中间表示（IR）定义与变换"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+rym-ast   = { workspace = true }
+thiserror = { workspace = true }

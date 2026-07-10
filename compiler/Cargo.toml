@@ -1,0 +1,37 @@
+[workspace]
+members = [
+    "crates/rymc",
+    "crates/rym-lexer",
+    "crates/rym-ast",
+    "crates/rym-parser",
+    "crates/rym-sema",
+    "crates/rym-ir",
+    "crates/rym-codegen",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["silicon-bastion"]
+license     = "MulanPSL-2.0"
+repository  = "https://github.com/silicon-bastion/rym"
+
+[workspace.dependencies]
+# 内部 crate
+rym-lexer   = { path = "crates/rym-lexer" }
+rym-ast     = { path = "crates/rym-ast" }
+rym-parser  = { path = "crates/rym-parser" }
+rym-sema    = { path = "crates/rym-sema" }
+rym-ir      = { path = "crates/rym-ir" }
+rym-codegen = { path = "crates/rym-codegen" }
+
+# 外部依赖
+thiserror   = "2"
+miette      = { version = "7", features = ["fancy"] }  # 漂亮的错误报告
+clap        = { version = "4", features = ["derive"] }  # CLI 参数解析
+
+[profile.release]
+opt-level   = 3
+lto         = true
+codegen-units = 1

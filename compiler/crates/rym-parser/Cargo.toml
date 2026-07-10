@@ -1,0 +1,14 @@
+[package]
+name        = "rym-parser"
+description = "Rym 语言语法解析器"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+rym-lexer = { workspace = true }
+rym-ast   = { workspace = true }
+thiserror = { workspace = true }
+miette    = { workspace = true }

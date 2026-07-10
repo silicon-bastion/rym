@@ -1,0 +1,13 @@
+[package]
+name        = "rym-sema"
+description = "Rym 语言语义分析与类型检查"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+rym-ast   = { workspace = true }
+thiserror = { workspace = true }
+miette    = { workspace = true }

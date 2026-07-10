@@ -1,0 +1,11 @@
+[package]
+name        = "rym-ast"
+description = "Rym 语言抽象语法树定义"
+version.workspace     = true
+edition.workspace     = true
+authors.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+
+[dependencies]
+rym-lexer = { workspace = true }

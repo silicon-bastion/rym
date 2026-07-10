@@ -1,8 +1,8 @@
-# 编译产物
+# Build artifacts
 *.o
 *.s
 *.out
-/compiler/build/
+/compiler/target/
 
 # macOS
 .DS_Store
