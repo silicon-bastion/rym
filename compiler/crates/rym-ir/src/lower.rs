@@ -6,7 +6,7 @@ use rym_ast::{
     ty::{Ty, TyKind},
 };
 use rym_lexer::Span;
-use crate::{BasicBlock, Instr, IrFunc, IrMode, IrModule, IrParam, IrTy, Op, Terminator};
+use crate::{BasicBlock, Instr, IrFunc, IrMode, IrModule, IrParam, IrTy, Op, StructLayout, Terminator};
 
 /// Lowers an AST `SourceFile` into an `IrModule`.
 pub struct Lowerer {
@@ -33,10 +33,19 @@ impl Lowerer {
         }
     }
 
-    /// Lower a full source file. Ignores non-fn items for now.
+    /// Lower a full source file.
     pub fn lower_file(&mut self, file: &SourceFile, module_name: &str) -> IrModule {
         let mut funcs = Vec::new();
+        let mut structs = Vec::new();
+
         for item in &file.def_zone {
+            // Collect struct layouts before lowering functions.
+            if let ItemKind::Type(type_def) = &item.kind {
+                structs.push(StructLayout {
+                    name:   type_def.name.clone(),
+                    fields: type_def.fields.iter().map(|f| f.name.clone()).collect(),
+                });
+            }
             if let Some(f) = self.lower_item(item) {
                 funcs.push(f);
             }
@@ -58,7 +67,7 @@ impl Lowerer {
             });
         }
 
-        IrModule { name: module_name.to_string(), funcs }
+        IrModule { name: module_name.to_string(), funcs, structs }
     }
 
     // ── Items ─────────────────────────────────────────────────
@@ -310,7 +319,7 @@ impl Lowerer {
             ExprKind::Field { base, field } => {
                 let base_val = self.lower_expr(base);
                 let dest = self.fresh_name();
-                self.emit(Some(dest.clone()), Op::Field { base: base_val, field: field.clone() }, span);
+                self.emit(Some(dest.clone()), Op::Field { base: base_val, field: field.clone(), struct_ty: None }, span);
                 dest
             }
 

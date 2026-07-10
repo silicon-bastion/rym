@@ -17,15 +17,28 @@ const ARG_REGS: &[&str] = &[
 
 pub struct Codegen {
     output: String,
+    /// Struct field-index lookup: type name → (field name → byte offset).
+    struct_layouts: HashMap<String, HashMap<String, usize>>,
 }
 
 impl Codegen {
     pub fn new() -> Self {
-        Self { output: String::new() }
+        Self { output: String::new(), struct_layouts: HashMap::new() }
     }
 
     pub fn emit_module(&mut self, module: &IrModule) -> String {
         self.output.clear();
+
+        // Build struct layouts (each field is 8 bytes, pointer-sized).
+        self.struct_layouts.clear();
+        for s in &module.structs {
+            let map: HashMap<String, usize> = s.fields.iter()
+                .enumerate()
+                .map(|(i, n)| (n.clone(), i * 8))
+                .collect();
+            self.struct_layouts.insert(s.name.clone(), map);
+        }
+
         writeln!(self.output, "\t.file\t\"{}\"", module.name).unwrap();
         writeln!(self.output, "\t.text").unwrap();
 
@@ -185,13 +198,15 @@ impl Codegen {
             }
 
             // Struct field access: compute base + field_index*8.
-            Op::Field { base, field } => {
+            Op::Field { base, field, struct_ty } => {
                 if let Some(d) = dest_reg {
                     let b = ra.get(base, &mut self.output);
-                    // Field offset is unknown at this stage — emit a named comment
-                    // and load at offset 0 as a placeholder.
-                    // A full implementation needs a type layout table.
-                    writeln!(self.output, "\tld.d\t{d}, {b}, 0\t# .{field}").unwrap();
+                    let offset = struct_ty.as_deref()
+                        .and_then(|ty| self.struct_layouts.get(ty))
+                        .and_then(|m| m.get(field))
+                        .copied()
+                        .unwrap_or(0);
+                    writeln!(self.output, "\tld.d\t{d}, {b}, {offset}\t# .{field}").unwrap();
                 }
             }
 

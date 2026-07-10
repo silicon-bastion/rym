@@ -44,14 +44,37 @@ impl TyChecker {
     // ── Registration pass ─────────────────────────────────────
 
     fn register_item(&mut self, item: &Item) {
-        if let ItemKind::Fn(fn_def) = &item.kind {
-            let sig = FnSig {
-                params: fn_def.params.iter().map(|p| {
-                    (p.name.clone(), p.mode.clone(), self.resolve_ty(&p.ty))
-                }).collect(),
-                ret: self.resolve_ty(&fn_def.ret),
-            };
-            self.scope.fns.insert(fn_def.name.clone(), sig);
+        match &item.kind {
+            ItemKind::Fn(fn_def) => {
+                let sig = FnSig {
+                    params: fn_def.params.iter().map(|p| {
+                        (p.name.clone(), p.mode.clone(), self.resolve_ty(&p.ty))
+                    }).collect(),
+                    ret: self.resolve_ty(&fn_def.ret),
+                };
+                self.scope.fns.insert(fn_def.name.clone(), sig);
+            }
+            ItemKind::Type(type_def) => {
+                // Register struct field layout so Field access can be typed.
+                let fields: Vec<(String, ResolvedTy)> = type_def.fields.iter()
+                    .map(|f| (f.name.clone(), self.resolve_ty(&f.ty)))
+                    .collect();
+                self.scope.types.insert(type_def.name.clone(), fields);
+            }
+            ItemKind::Enum(enum_def) => {
+                // Register each variant as a zero-arg or one-arg constructor.
+                for variant in &enum_def.variants {
+                    let ret_ty = ResolvedTy::Named(enum_def.name.clone());
+                    let params = if let Some(payload_ty) = &variant.payload {
+                        vec![("value".into(), OwnershipMode::Move, self.resolve_ty(payload_ty))]
+                    } else {
+                        vec![]
+                    };
+                    let qualified = format!("{}.{}", enum_def.name, variant.name);
+                    self.scope.fns.insert(qualified, FnSig { params, ret: ret_ty });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -282,9 +305,26 @@ impl TyChecker {
                 self.infer_piped_call(right, &left_ty, expr.span)
             }
 
-            ExprKind::Field { base, .. } => {
-                self.infer_expr(base);
-                ResolvedTy::Unknown   // resolved fully after type layout pass
+            ExprKind::Field { base, field } => {
+                let base_ty = self.infer_expr(base);
+                // Look up the field in the type table.
+                let struct_name = match &base_ty {
+                    ResolvedTy::Named(n) => Some(n.clone()),
+                    _ => None,
+                };
+                if let Some(name) = struct_name {
+                    if let Some(fields) = self.scope.types.get(&name).cloned() {
+                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == field) {
+                            return ty.clone();
+                        } else {
+                            self.errors.push(SemaError::Undefined {
+                                name: format!("{name}.{field}"),
+                                span: expr.span,
+                            });
+                        }
+                    }
+                }
+                ResolvedTy::Unknown
             }
 
             ExprKind::Index { base, index } => {
@@ -376,7 +416,28 @@ impl TyChecker {
             ExprKind::UnOp { expr: inner, .. } => self.infer_expr(inner),
 
             ExprKind::StructLit { name, fields } => {
-                for f in fields { self.infer_expr(&f.expr); }
+                if let Some(layout) = self.scope.types.get(name).cloned() {
+                    for f in fields {
+                        let val_ty = self.infer_expr(&f.expr);
+                        if let Some((_, expected_ty)) = layout.iter().find(|(n, _)| n == &f.name) {
+                            if !self.ty_compatible(&val_ty, expected_ty) {
+                                self.errors.push(SemaError::TypeMismatch {
+                                    expected: expected_ty.display(),
+                                    found:    val_ty.display(),
+                                    span:     expr.span,
+                                });
+                            }
+                        } else {
+                            self.errors.push(SemaError::Undefined {
+                                name: format!("{name}.{}", f.name),
+                                span: expr.span,
+                            });
+                        }
+                    }
+                } else {
+                    // Unknown type — still infer field exprs.
+                    for f in fields { self.infer_expr(&f.expr); }
+                }
                 ResolvedTy::Named(name.clone())
             }
 
@@ -612,6 +673,33 @@ mod tests {
         assert_ok(
             "type 请求 { 路径: str }\n\
              定 r = 请求{ 路径=\"/\" }"
+        );
+    }
+
+    #[test]
+    fn struct_field_type_ok() {
+        assert_ok(
+            "type Point { x: i64\ny: i64 }\n\
+             fn get_x(p: read Point) -> i64 { return p.x }\n\
+             定 p = Point{ x=1, y=2 }\n\
+             定 x = get_x(p)"
+        );
+    }
+
+    #[test]
+    fn struct_unknown_field_err() {
+        assert_err(
+            "type Point { x: i64 }\n\
+             定 p = Point{ x=1 }\n\
+             定 v = p.z"
+        );
+    }
+
+    #[test]
+    fn struct_wrong_field_type_err() {
+        assert_err(
+            "type Point { x: i64 }\n\
+             定 p = Point{ x=true }"
         );
     }
 }

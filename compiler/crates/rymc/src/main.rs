@@ -5,6 +5,8 @@ use rym_parser::Parser as RymParser;
 use rym_sema::TyChecker;
 use rym_ir::lower::Lowerer;
 use rym_codegen::{Codegen, CCodegen, la64::dump_ir};
+use rym_ast::{SourceFile, item::ItemKind};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -76,8 +78,12 @@ fn main() -> Result<()> {
     }
 
     // ── Phase 2: Parse ───────────────────────────────────────
-    let ast = RymParser::new(tokens).parse_file()
+    let mut ast = RymParser::new(tokens).parse_file()
         .map_err(|e| miette::miette!("parse error: {e}"))?;
+
+    // Resolve imports: merge each imported file's def_zone into this file.
+    let base_dir = cli.input.parent().unwrap_or(Path::new("."));
+    resolve_imports(&mut ast, base_dir)?;
 
     if cli.dump_ast {
         println!("{:#?}", ast);
@@ -108,6 +114,60 @@ fn main() -> Result<()> {
         "la64" | "loongarch64" => compile_la64(&cli, &ir, &base_out),
         other => Err(miette::miette!("unknown target '{other}' — use 'c' or 'la64'")),
     }
+}
+
+// ── Import resolution ─────────────────────────────────────────
+
+/// Recursively resolve `import "path"` items, merging their def_zones.
+/// Cycles are detected by tracking visited canonical paths.
+fn resolve_imports(file: &mut SourceFile, base_dir: &Path) -> Result<()> {
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    resolve_imports_inner(file, base_dir, &mut visited)
+}
+
+fn resolve_imports_inner(
+    file: &mut SourceFile,
+    base_dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let mut i = 0;
+    while i < file.def_zone.len() {
+        if let ItemKind::Import(path_str) = &file.def_zone[i].kind {
+            let path_str = path_str.clone();
+            let import_path = base_dir.join(&path_str);
+            let canonical = import_path.canonicalize()
+                .unwrap_or_else(|_| import_path.clone());
+
+            if visited.contains(&canonical) {
+                // Already merged — remove the import stub and continue.
+                file.def_zone.remove(i);
+                continue;
+            }
+            visited.insert(canonical.clone());
+
+            let src = std::fs::read_to_string(&import_path)
+                .map_err(|e| miette::miette!("import '{}': {e}", import_path.display()))?;
+            let tokens = Lexer::new(&src).tokenize()
+                .map_err(|e| miette::miette!("import '{}' lex error: {e}", path_str))?;
+            let mut imported = RymParser::new(tokens).parse_file()
+                .map_err(|e| miette::miette!("import '{}' parse error: {e}", path_str))?;
+
+            let import_dir = import_path.parent().unwrap_or(Path::new("."));
+            resolve_imports_inner(&mut imported, import_dir, visited)?;
+
+            // Remove the Import stub, splice in the imported def_zone at the same position.
+            file.def_zone.remove(i);
+            let items = imported.def_zone;
+            let n = items.len();
+            for (j, item) in items.into_iter().enumerate() {
+                file.def_zone.insert(i + j, item);
+            }
+            i += n;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
 }
 
 // ── C backend ────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 /// Translates an IrModule into a self-contained C file that can be compiled
 /// with any standard C compiler (gcc, clang, tcc) on any platform.
 use rym_ir::{BasicBlock, IrFunc, IrModule, IrTy, Op, Terminator};
+use std::collections::HashMap;
 use std::fmt::Write;
 
 pub struct CCodegen {
@@ -11,6 +12,8 @@ pub struct CCodegen {
     indent: usize,
     /// Set of function names that return void.
     void_fns: std::collections::HashSet<String>,
+    /// Struct field layouts: type name → (field name → index).
+    struct_layouts: HashMap<String, HashMap<String, usize>>,
 }
 
 impl CCodegen {
@@ -21,7 +24,7 @@ impl CCodegen {
         void_fns.insert("print".into());
         void_fns.insert("__rym_println".into());
         void_fns.insert("__rym_main".into());
-        Self { out: String::new(), indent: 0, void_fns }
+        Self { out: String::new(), indent: 0, void_fns, struct_layouts: HashMap::new() }
     }
 
     pub fn emit_module(&mut self, module: &IrModule) -> String {
@@ -69,6 +72,15 @@ impl CCodegen {
         self.line("#define Ok(v)  ((RymResult){ .is_ok=1, .val.ok=(void*)(uintptr_t)(v) })");
         self.line("#define Err(v) ((RymResult){ .is_ok=0, .val.err=(void*)(uintptr_t)(v) })");
         self.line("");
+
+        // Build struct field-index lookup tables.
+        for s in &module.structs {
+            let map: HashMap<String, usize> = s.fields.iter()
+                .enumerate()
+                .map(|(i, n)| (n.clone(), i))
+                .collect();
+            self.struct_layouts.insert(s.name.clone(), map);
+        }
 
         // Register which user functions return void.
         for func in &module.funcs {
@@ -254,12 +266,16 @@ impl CCodegen {
                 }
             }
 
-            Op::Field { base, field } => {
+            Op::Field { base, field, struct_ty } => {
                 if let Some(d) = dest {
                     let b = ssa_or_var(base);
-                    // Cast base to uintptr_t* and offset by field index — real
-                    // implementation needs a struct layout table.
-                    self.iline(&format!("{d} = ((uintptr_t*){b})[0];  /* .{field} */"));
+                    // Look up field index from struct layout table.
+                    let idx = struct_ty.as_deref()
+                        .and_then(|ty| self.struct_layouts.get(ty))
+                        .and_then(|m| m.get(field))
+                        .copied()
+                        .unwrap_or(0);
+                    self.iline(&format!("{d} = ((uintptr_t*){b})[{idx}];  /* .{field} */"));
                 }
             }
 

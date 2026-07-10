@@ -5,8 +5,17 @@ use rym_lexer::Span;
 /// A complete IR program — one module per source file.
 #[derive(Debug, Clone)]
 pub struct IrModule {
-    pub name:  String,
-    pub funcs: Vec<IrFunc>,
+    pub name:   String,
+    pub funcs:  Vec<IrFunc>,
+    /// Struct type layouts: type name → ordered field names.
+    pub structs: Vec<StructLayout>,
+}
+
+/// Layout of a struct type used for field-offset calculation.
+#[derive(Debug, Clone)]
+pub struct StructLayout {
+    pub name:   String,
+    pub fields: Vec<String>,
 }
 
 /// A function in IR form.
@@ -90,8 +99,8 @@ pub enum Op {
     Ref(String),
     /// Dereference pointer: `*x`
     Deref(String),
-    /// Field access: `base.field`
-    Field { base: String, field: String },
+    /// Field access: `base.field` — `struct_ty` is the resolved struct type name.
+    Field { base: String, field: String, struct_ty: Option<String> },
     /// Slice index: `base[index]`
     Index { base: String, index: String },
 
