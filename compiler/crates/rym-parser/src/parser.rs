@@ -327,10 +327,34 @@ impl Parser {
             _ => {
                 // Expression statement (including pipelines and assignments).
                 let expr = self.parse_expr()?;
-                // Check for assignment: `name = value`
+                // Check for simple assignment: `name = value`
                 if self.eat(TokenKind::Assign) {
                     let value = self.parse_expr()?;
                     return Ok(Stmt { kind: StmtKind::Assign { target: expr, value }, span });
+                }
+                // Compound assignment: `name op= value` desugars to `name = name op value`
+                let compound_op: Option<BinOp> = match self.peek().clone() {
+                    TokenKind::PlusAssign    => Some(BinOp::Add),
+                    TokenKind::MinusAssign   => Some(BinOp::Sub),
+                    TokenKind::StarAssign    => Some(BinOp::Mul),
+                    TokenKind::SlashAssign   => Some(BinOp::Div),
+                    TokenKind::PercentAssign => Some(BinOp::Rem),
+                    TokenKind::AmpAssign     => Some(BinOp::BitAnd),
+                    TokenKind::BitOrAssign   => Some(BinOp::BitOr),
+                    TokenKind::CaretAssign   => Some(BinOp::BitXor),
+                    TokenKind::ShlAssign     => Some(BinOp::Shl),
+                    TokenKind::ShrAssign     => Some(BinOp::Shr),
+                    _                        => None,
+                };
+                if let Some(op) = compound_op {
+                    self.advance();
+                    let rhs = self.parse_expr()?;
+                    let es = expr.span;
+                    let binop = Expr {
+                        kind: ExprKind::BinOp { op, left: Box::new(expr.clone()), right: Box::new(rhs) },
+                        span: es,
+                    };
+                    return Ok(Stmt { kind: StmtKind::Assign { target: expr, value: binop }, span });
                 }
                 Ok(Stmt { kind: StmtKind::Expr(expr), span })
             }

@@ -98,14 +98,14 @@ impl<'src> Lexer<'src> {
             ',' => TokenKind::Comma,
             ';' => TokenKind::Semi,
             '@' => TokenKind::At,
-            '%' => TokenKind::Percent,
-            '/' => TokenKind::Slash,
             '?' => TokenKind::Question,
-            '*' => TokenKind::Star,
             '+' => {
                 if self.current() == Some('+') {
                     self.advance();
                     TokenKind::PlusPlus
+                } else if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::PlusAssign
                 } else {
                     TokenKind::Plus
                 }
@@ -114,8 +114,35 @@ impl<'src> Lexer<'src> {
                 if self.current() == Some('>') {
                     self.advance();
                     TokenKind::Arrow
+                } else if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::MinusAssign
                 } else {
                     TokenKind::Minus
+                }
+            }
+            '*' => {
+                if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::StarAssign
+                } else {
+                    TokenKind::Star
+                }
+            }
+            '/' => {
+                if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::SlashAssign
+                } else {
+                    TokenKind::Slash
+                }
+            }
+            '%' => {
+                if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::PercentAssign
+                } else {
+                    TokenKind::Percent
                 }
             }
             '=' => {
@@ -143,7 +170,12 @@ impl<'src> Lexer<'src> {
                     TokenKind::LtEq
                 } else if self.current() == Some('<') {
                     self.advance();
-                    TokenKind::Shl
+                    if self.current() == Some('=') {
+                        self.advance();
+                        TokenKind::ShlAssign
+                    } else {
+                        TokenKind::Shl
+                    }
                 } else {
                     TokenKind::Lt
                 }
@@ -154,7 +186,12 @@ impl<'src> Lexer<'src> {
                     TokenKind::GtEq
                 } else if self.current() == Some('>') {
                     self.advance();
-                    TokenKind::Shr
+                    if self.current() == Some('=') {
+                        self.advance();
+                        TokenKind::ShrAssign
+                    } else {
+                        TokenKind::Shr
+                    }
                 } else {
                     TokenKind::Gt
                 }
@@ -163,13 +200,21 @@ impl<'src> Lexer<'src> {
                 if self.current() == Some('&') {
                     self.advance();
                     TokenKind::And
+                } else if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::AmpAssign
                 } else {
-                    // Single `&` is lexed as Amp; parser context disambiguates
-                    // between address-of (prefix) and bitwise AND (infix).
                     TokenKind::Amp
                 }
             }
-            '^' => TokenKind::Caret,
+            '^' => {
+                if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::CaretAssign
+                } else {
+                    TokenKind::Caret
+                }
+            }
             '~' => TokenKind::Tilde,
             '|' => {
                 if self.current() == Some('>') {
@@ -178,6 +223,9 @@ impl<'src> Lexer<'src> {
                 } else if self.current() == Some('|') {
                     self.advance();
                     TokenKind::Or
+                } else if self.current() == Some('=') {
+                    self.advance();
+                    TokenKind::BitOrAssign
                 } else {
                     TokenKind::BitOr
                 }

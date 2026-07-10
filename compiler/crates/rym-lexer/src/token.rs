@@ -139,6 +139,16 @@ pub enum TokenKind {
 
     // ── Assignment ───────────────────────────────────────────
     Assign,
+    PlusAssign,   // `+=`
+    MinusAssign,  // `-=`
+    StarAssign,   // `*=`
+    SlashAssign,  // `/=`
+    PercentAssign,// `%=`
+    AmpAssign,    // `&=`
+    BitOrAssign,  // `|=`
+    CaretAssign,  // `^=`
+    ShlAssign,    // `<<=`
+    ShrAssign,    // `>>=`
 
     // ── Logical ──────────────────────────────────────────────
     And, Or, Not,
