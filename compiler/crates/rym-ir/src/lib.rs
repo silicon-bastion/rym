@@ -5,10 +5,12 @@ use rym_lexer::Span;
 /// A complete IR program — one module per source file.
 #[derive(Debug, Clone)]
 pub struct IrModule {
-    pub name:   String,
-    pub funcs:  Vec<IrFunc>,
+    pub name:    String,
+    pub funcs:   Vec<IrFunc>,
     /// Struct type layouts: type name → ordered field names.
     pub structs: Vec<StructLayout>,
+    /// Enum variant layouts: enum name → ordered variant names.
+    pub enums:   Vec<EnumLayout>,
 }
 
 /// Layout of a struct type used for field-offset calculation.
@@ -16,6 +18,20 @@ pub struct IrModule {
 pub struct StructLayout {
     pub name:   String,
     pub fields: Vec<String>,
+}
+
+/// Enum variant layout: variant name → tag index.
+#[derive(Debug, Clone)]
+pub struct EnumLayout {
+    pub name:     String,
+    /// Ordered variant names; index == tag value.
+    pub variants: Vec<String>,
+}
+
+impl EnumLayout {
+    pub fn tag_of(&self, variant: &str) -> Option<usize> {
+        self.variants.iter().position(|v| v == variant)
+    }
 }
 
 /// A function in IR form.
@@ -107,8 +123,18 @@ pub enum Op {
     // ── Calls ─────────────────────────────────────────────────
     Call { func: String, args: Vec<String> },
 
+    // ── Enum / tagged-union construction ─────────────────────
+    /// Build an enum value: `{ tag, payload }` where tag is the variant index.
+    MakeVariant { tag: usize, payload: String },
+    /// Extract the tag index from an enum value.
+    GetTag(String),
+    /// Extract the payload from an enum value.
+    GetPayload(String),
+
     // ── Result / error handling ───────────────────────────────
+    /// Wrap a value as Ok (tag=0).
     WrapOk(String),
+    /// Wrap a value as Err (tag=1).
     WrapErr(String),
     /// Extract Ok value or jump to `err_block` on Err.
     UnwrapOk { val: String, err_block: String },

@@ -540,8 +540,11 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.advance();
-                // Struct literal: `Name{ field=expr, ... }`
-                if self.peek_is(TokenKind::LBrace) {
+                // Struct literal: `Name { field = expr, ... }`
+                // Only treat `{` as a struct literal if the interior starts with `}` (empty)
+                // or `Ident =` (field initializer). This prevents match/if subjects from
+                // being greedily consumed as struct literals.
+                if self.peek_is(TokenKind::LBrace) && self.is_struct_lit_opening() {
                     self.advance();
                     let mut fields = Vec::new();
                     while !self.peek_is(TokenKind::RBrace) {
@@ -907,6 +910,20 @@ impl Parser {
 
     fn is_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::Eof)
+    }
+
+    /// Returns true if the current token is `{` and the content looks like a
+    /// struct literal: either `{}` or `{ ident = ...`. This disambiguates
+    /// `Name { field = val }` from `match Name { arm => ... }`.
+    fn is_struct_lit_opening(&self) -> bool {
+        // pos is currently at `{`
+        let after_brace = self.tokens.get(self.pos + 1).map(|t| &t.kind);
+        let after_ident = self.tokens.get(self.pos + 2).map(|t| &t.kind);
+        match (after_brace, after_ident) {
+            (Some(TokenKind::RBrace), _) => true,
+            (Some(TokenKind::Ident(_)), Some(TokenKind::Assign)) => true,
+            _ => false,
+        }
     }
 }
 

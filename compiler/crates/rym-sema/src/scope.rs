@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use rym_lexer::Span;
 use rym_ast::expr::OwnershipMode;
 
@@ -87,6 +87,8 @@ pub struct Scope {
     pub fns: HashMap<String, FnSig>,
     /// User-defined type field maps.
     pub types: HashMap<String, Vec<(String, ResolvedTy)>>,
+    /// Names of enum types (used to recognize `EnumName.Variant` expressions).
+    pub enums: HashSet<String>,
 }
 
 impl Scope {
@@ -95,6 +97,7 @@ impl Scope {
             frames: vec![HashMap::new()],
             fns:    HashMap::new(),
             types:  HashMap::new(),
+            enums:  HashSet::new(),
         }
     }
 

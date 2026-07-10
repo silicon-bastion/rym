@@ -183,10 +183,12 @@ fn compile_c(
     let mut gen = CCodegen::new();
     let mut c_src = gen.emit_module(ir);
 
-    // Inject println helper after the first line if needed.
-    if c_src.contains("__rym_println") {
-        let helper = rym_codegen::c::println_helper();
-        // Insert after the first newline (after the "/* Generated */" comment).
+    // Inject I/O helpers when any of print/println/puts are used.
+    let needs_io = c_src.contains("__rym_print")
+        || c_src.contains("__rym_println")
+        || c_src.contains("__rym_puts");
+    if needs_io {
+        let helper = rym_codegen::c::io_helpers();
         if let Some(pos) = c_src.find('\n') {
             c_src.insert_str(pos + 1, helper);
         }

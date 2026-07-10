@@ -2,7 +2,7 @@
 ///
 /// Translates an IrModule into a self-contained C file that can be compiled
 /// with any standard C compiler (gcc, clang, tcc) on any platform.
-use rym_ir::{BasicBlock, IrFunc, IrModule, IrTy, Op, Terminator};
+use rym_ir::{BasicBlock, IrFunc, IrModule, IrTy, Op, Terminator, EnumLayout};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -14,6 +14,8 @@ pub struct CCodegen {
     void_fns: std::collections::HashSet<String>,
     /// Struct field layouts: type name → (field name → index).
     struct_layouts: HashMap<String, HashMap<String, usize>>,
+    /// Enum layouts for comment generation.
+    enum_layouts: Vec<EnumLayout>,
 }
 
 impl CCodegen {
@@ -22,9 +24,13 @@ impl CCodegen {
         // Built-in void functions.
         void_fns.insert("println".into());
         void_fns.insert("print".into());
+        void_fns.insert("puts".into());
+        void_fns.insert("__rym_print".into());
         void_fns.insert("__rym_println".into());
+        void_fns.insert("__rym_puts".into());
+        void_fns.insert("__rym_puts_slice".into());
         void_fns.insert("__rym_main".into());
-        Self { out: String::new(), indent: 0, void_fns, struct_layouts: HashMap::new() }
+        Self { out: String::new(), indent: 0, void_fns, struct_layouts: HashMap::new(), enum_layouts: Vec::new() }
     }
 
     pub fn emit_module(&mut self, module: &IrModule) -> String {
@@ -72,6 +78,20 @@ impl CCodegen {
         self.line("#define Ok(v)  ((RymResult){ .is_ok=1, .val.ok=(void*)(uintptr_t)(v) })");
         self.line("#define Err(v) ((RymResult){ .is_ok=0, .val.err=(void*)(uintptr_t)(v) })");
         self.line("");
+
+        // Collect enum layouts.
+        self.enum_layouts = module.enums.clone();
+
+        // Emit enum tag constants.
+        if !module.enums.is_empty() {
+            self.line("/* Enum tag constants */");
+            for e in &module.enums {
+                for (i, v) in e.variants.iter().enumerate() {
+                    self.line(&format!("#define {}_{} {}UL", e.name, v, i));
+                }
+            }
+            self.line("");
+        }
 
         // Build struct field-index lookup tables.
         for s in &module.structs {
@@ -220,13 +240,13 @@ impl CCodegen {
             Op::Call { func: fname, args } => {
                 let arg_str = args.iter().map(|a| ssa_or_var(a)).collect::<Vec<_>>().join(", ");
                 let c_func = match fname.as_str() {
-                    "print"   => "printf",
+                    "print"   => "__rym_print",
                     "println" => "__rym_println",
+                    "puts"    => "__rym_puts",
                     "__main"  => "__rym_main",
                     other     => other,
                 };
-                let is_void = self.void_fns.contains(c_func)
-                    || matches!(c_func, "printf");
+                let is_void = self.void_fns.contains(c_func);
                 if let Some(d) = dest {
                     if is_void {
                         self.iline(&format!("{c_func}({arg_str});"));
@@ -239,22 +259,50 @@ impl CCodegen {
                 }
             }
 
-            Op::WrapOk(v) => {
+            Op::MakeVariant { tag, payload } => {
+                if let Some(d) = dest {
+                    let p = ssa_or_var(payload);
+                    // Allocate 2-word tagged union: [tag, payload].
+                    self.iline(&format!("{d} = (uintptr_t)malloc(2 * sizeof(uintptr_t));"));
+                    self.iline(&format!("((uintptr_t*){d})[0] = (uintptr_t){tag}UL;"));
+                    self.iline(&format!("((uintptr_t*){d})[1] = (uintptr_t){p};"));
+                }
+            }
+            Op::GetTag(v) => {
                 if let Some(d) = dest {
                     let s = ssa_or_var(v);
-                    self.iline(&format!("{d} = (uintptr_t)({s});  /* Ok */"));
+                    self.iline(&format!("{d} = ((uintptr_t*){s})[0];"));
+                }
+            }
+            Op::GetPayload(v) => {
+                if let Some(d) = dest {
+                    let s = ssa_or_var(v);
+                    self.iline(&format!("{d} = ((uintptr_t*){s})[1];"));
+                }
+            }
+
+            // WrapOk/WrapErr kept for backwards compatibility — lower as MakeVariant.
+            Op::WrapOk(v) => {
+                if let Some(d) = dest {
+                    let p = ssa_or_var(v);
+                    self.iline(&format!("{d} = (uintptr_t)malloc(2 * sizeof(uintptr_t));"));
+                    self.iline(&format!("((uintptr_t*){d})[0] = 0UL;"));
+                    self.iline(&format!("((uintptr_t*){d})[1] = (uintptr_t){p};"));
                 }
             }
             Op::WrapErr(v) => {
                 if let Some(d) = dest {
-                    let s = ssa_or_var(v);
-                    self.iline(&format!("{d} = (uintptr_t)({s});  /* Err */"));
+                    let p = ssa_or_var(v);
+                    self.iline(&format!("{d} = (uintptr_t)malloc(2 * sizeof(uintptr_t));"));
+                    self.iline(&format!("((uintptr_t*){d})[0] = 1UL;"));
+                    self.iline(&format!("((uintptr_t*){d})[1] = (uintptr_t){p};"));
                 }
             }
             Op::UnwrapOk { val, err_block } => {
+                // Legacy op — still emitted by some paths; treat as GetPayload (tag already checked).
                 if let Some(d) = dest {
                     let s = ssa_or_var(val);
-                    self.iline(&format!("{d} = {s};  /* unwrap or goto {err_block} */"));
+                    self.iline(&format!("{d} = ((uintptr_t*){s})[1];  /* unwrap payload, err→{err_block} */"));
                 }
             }
 
@@ -525,9 +573,24 @@ macro_rules! cmp {
 use arith;
 use cmp;
 
-// ── Helper: emit a println wrapper ───────────────────────────
+// ── Helpers: print / println / puts ──────────────────────────
 
-/// Returns a small C helper that rymc inserts at the top when `println` is used.
+/// C helpers for print, println, puts — injected at the top of emitted C.
+pub fn io_helpers() -> &'static str {
+    r#"#include <stdio.h>
+#include <string.h>
+static void __rym_print(uintptr_t s) { fputs((const char*)s, stdout); }
+static void __rym_println(uintptr_t s) { puts((const char*)s); }
+static void __rym_puts(uintptr_t s) { puts((const char*)s); }
+static void __rym_puts_slice(uintptr_t* ptr, uintptr_t len) {
+    uintptr_t i;
+    for (i = 0; i < len; i++) { puts((const char*)ptr[i]); }
+}
+"#
+}
+
+#[doc(hidden)]
+#[deprecated = "use io_helpers()"]
 pub fn println_helper() -> &'static str {
-    "#include <stdio.h>\nstatic void __rym_println(uintptr_t s) { puts((const char*)s); }\n"
+    io_helpers()
 }

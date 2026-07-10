@@ -62,6 +62,7 @@ impl TyChecker {
                 self.scope.types.insert(type_def.name.clone(), fields);
             }
             ItemKind::Enum(enum_def) => {
+                self.scope.enums.insert(enum_def.name.clone());
                 // Register each variant as a zero-arg or one-arg constructor.
                 for variant in &enum_def.variants {
                     let ret_ty = ResolvedTy::Named(enum_def.name.clone());
@@ -231,6 +232,11 @@ impl TyChecker {
             ExprKind::Str(_)   => ResolvedTy::Str,
 
             ExprKind::Ident(name) => {
+                // Enum type names used as namespace prefix (e.g. `Color` in `Color.Red`)
+                // are handled by the Field branch — suppress "undefined" here.
+                if self.scope.enums.contains(name) {
+                    return ResolvedTy::Named(name.clone());
+                }
                 if let Some(b) = self.scope.lookup(name) {
                     if b.moved {
                         self.errors.push(SemaError::UseAfterMove {
@@ -306,6 +312,13 @@ impl TyChecker {
             }
 
             ExprKind::Field { base, field } => {
+                // Check for `EnumName.Variant` before treating as struct field access.
+                if let ExprKind::Ident(type_name) = &base.kind {
+                    let qualified = format!("{}.{}", type_name, field);
+                    if let Some(sig) = self.scope.fns.get(&qualified).cloned() {
+                        return sig.ret.clone();
+                    }
+                }
                 let base_ty = self.infer_expr(base);
                 // Look up the field in the type table.
                 let struct_name = match &base_ty {

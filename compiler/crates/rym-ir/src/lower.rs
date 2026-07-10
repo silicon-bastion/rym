@@ -6,7 +6,7 @@ use rym_ast::{
     ty::{Ty, TyKind},
 };
 use rym_lexer::Span;
-use crate::{BasicBlock, Instr, IrFunc, IrMode, IrModule, IrParam, IrTy, Op, StructLayout, Terminator};
+use crate::{BasicBlock, EnumLayout, Instr, IrFunc, IrMode, IrModule, IrParam, IrTy, Op, StructLayout, Terminator};
 
 /// Lowers an AST `SourceFile` into an `IrModule`.
 pub struct Lowerer {
@@ -20,6 +20,8 @@ pub struct Lowerer {
     blocks: Vec<BasicBlock>,
     /// Label of the current basic block.
     current_label: String,
+    /// Enum layouts collected from the AST (variant name → tag index).
+    enum_layouts: Vec<EnumLayout>,
 }
 
 impl Lowerer {
@@ -30,6 +32,7 @@ impl Lowerer {
             instrs:        Vec::new(),
             blocks:        Vec::new(),
             current_label: "entry".into(),
+            enum_layouts:  Vec::new(),
         }
     }
 
@@ -39,17 +42,32 @@ impl Lowerer {
         let mut structs = Vec::new();
 
         for item in &file.def_zone {
-            // Collect struct layouts before lowering functions.
-            if let ItemKind::Type(type_def) = &item.kind {
-                structs.push(StructLayout {
-                    name:   type_def.name.clone(),
-                    fields: type_def.fields.iter().map(|f| f.name.clone()).collect(),
-                });
+            match &item.kind {
+                ItemKind::Type(type_def) => {
+                    structs.push(StructLayout {
+                        name:   type_def.name.clone(),
+                        fields: type_def.fields.iter().map(|f| f.name.clone()).collect(),
+                    });
+                }
+                ItemKind::Enum(enum_def) => {
+                    let layout = EnumLayout {
+                        name:     enum_def.name.clone(),
+                        variants: enum_def.variants.iter().map(|v| v.name.clone()).collect(),
+                    };
+                    self.enum_layouts.push(layout.clone());
+                    structs.push(StructLayout {
+                        name:   enum_def.name.clone(),
+                        fields: vec!["__tag".into(), "__payload".into()],
+                    });
+                }
+                _ => {}
             }
             if let Some(f) = self.lower_item(item) {
                 funcs.push(f);
             }
         }
+
+        let enums = self.enum_layouts.clone();
 
         // Algorithm zone: wrap into an implicit `__main` function.
         if !file.alg_zone.is_empty() {
@@ -67,7 +85,7 @@ impl Lowerer {
             });
         }
 
-        IrModule { name: module_name.to_string(), funcs, structs }
+        IrModule { name: module_name.to_string(), funcs, structs, enums }
     }
 
     // ── Items ─────────────────────────────────────────────────
@@ -317,6 +335,19 @@ impl Lowerer {
             }
 
             ExprKind::Field { base, field } => {
+                // Check if this is an enum variant expression: `EnumName.Variant`.
+                if let ExprKind::Ident(type_name) = &base.kind {
+                    if let Some(layout) = self.enum_layouts.iter().find(|e| &e.name == type_name) {
+                        if let Some(tag) = layout.tag_of(field) {
+                            // No-payload variant — payload is 0.
+                            let zero = self.fresh_name();
+                            let dest = self.fresh_name();
+                            self.emit(Some(zero.clone()), Op::ConstInt(0), span);
+                            self.emit(Some(dest.clone()), Op::MakeVariant { tag, payload: zero }, span);
+                            return dest;
+                        }
+                    }
+                }
                 let base_val = self.lower_expr(base);
                 let dest = self.fresh_name();
                 self.emit(Some(dest.clone()), Op::Field { base: base_val, field: field.clone(), struct_ty: None }, span);
@@ -345,71 +376,105 @@ impl Lowerer {
                 dest
             }
 
-            // Error operators: or_return — unwrap or propagate.
+            // Error operators: or_return — unwrap Ok payload or propagate Err.
             ExprKind::OrReturn(inner) => {
-                let val = self.lower_expr(inner);
-                let err_block = self.fresh_label();
+                let val       = self.lower_expr(inner);
+                let tag       = self.fresh_name();
                 let ok_dest   = self.fresh_name();
-                self.emit(Some(ok_dest.clone()), Op::UnwrapOk { val, err_block: err_block.clone() }, span);
-                // err_block: propagate the error upward.
-                let cont_block = self.fresh_label();
-                self.finish_block(Terminator::Jump(cont_block.clone()));
+                let ok_block  = self.fresh_label();
+                let err_block = self.fresh_label();
+                let cont      = self.fresh_label();
+                self.emit(Some(tag.clone()), Op::GetTag(val.clone()), span);
+                // tag == 0 → Ok branch
+                let zero = self.fresh_name();
+                self.emit(Some(zero.clone()), Op::ConstInt(0), span);
+                let is_ok = self.fresh_name();
+                self.emit(Some(is_ok.clone()), Op::CmpEq(tag, zero), span);
+                self.finish_block(Terminator::Branch { cond: is_ok, then_block: ok_block.clone(), else_block: err_block.clone() });
+                self.start_block(ok_block);
+                self.emit(Some(ok_dest.clone()), Op::GetPayload(val.clone()), span);
+                self.finish_block(Terminator::Jump(cont.clone()));
                 self.start_block(err_block);
-                self.finish_block(Terminator::Return(Some("__err".into())));
-                self.start_block(cont_block);
+                // Propagate the whole Result value upward.
+                self.finish_block(Terminator::Return(Some(val)));
+                self.start_block(cont);
                 ok_dest
             }
 
             ExprKind::OrPanic(inner, _msg) => {
-                let val = self.lower_expr(inner);
-                let err_block = self.fresh_label();
+                let val       = self.lower_expr(inner);
+                let tag       = self.fresh_name();
                 let ok_dest   = self.fresh_name();
-                self.emit(Some(ok_dest.clone()), Op::UnwrapOk { val, err_block: err_block.clone() }, span);
-                let cont_block = self.fresh_label();
-                self.finish_block(Terminator::Jump(cont_block.clone()));
+                let ok_block  = self.fresh_label();
+                let err_block = self.fresh_label();
+                let cont      = self.fresh_label();
+                self.emit(Some(tag.clone()), Op::GetTag(val.clone()), span);
+                let zero = self.fresh_name();
+                self.emit(Some(zero.clone()), Op::ConstInt(0), span);
+                let is_ok = self.fresh_name();
+                self.emit(Some(is_ok.clone()), Op::CmpEq(tag, zero), span);
+                self.finish_block(Terminator::Branch { cond: is_ok, then_block: ok_block.clone(), else_block: err_block.clone() });
+                self.start_block(ok_block);
+                self.emit(Some(ok_dest.clone()), Op::GetPayload(val), span);
+                self.finish_block(Terminator::Jump(cont.clone()));
                 self.start_block(err_block);
                 self.finish_block(Terminator::Unreachable);
-                self.start_block(cont_block);
+                self.start_block(cont);
                 ok_dest
             }
 
             ExprKind::OrElse(inner, default) => {
-                let val = self.lower_expr(inner);
+                let val          = self.lower_expr(inner);
+                let tag          = self.fresh_name();
+                let ok_dest      = self.fresh_name();
+                let ok_block     = self.fresh_label();
                 let default_block = self.fresh_label();
-                let ok_dest       = self.fresh_name();
-                self.emit(Some(ok_dest.clone()), Op::UnwrapOk { val, err_block: default_block.clone() }, span);
-                let cont_block = self.fresh_label();
-                self.finish_block(Terminator::Jump(cont_block.clone()));
+                let cont         = self.fresh_label();
+                self.emit(Some(tag.clone()), Op::GetTag(val.clone()), span);
+                let zero = self.fresh_name();
+                self.emit(Some(zero.clone()), Op::ConstInt(0), span);
+                let is_ok = self.fresh_name();
+                self.emit(Some(is_ok.clone()), Op::CmpEq(tag, zero), span);
+                self.finish_block(Terminator::Branch { cond: is_ok, then_block: ok_block.clone(), else_block: default_block.clone() });
+                self.start_block(ok_block);
+                self.emit(Some(ok_dest.clone()), Op::GetPayload(val), span);
+                self.finish_block(Terminator::Jump(cont.clone()));
                 self.start_block(default_block);
                 let def_val = self.lower_expr(default);
                 self.emit(Some(ok_dest.clone()), Op::Load(def_val), span);
-                self.finish_block(Terminator::Jump(cont_block.clone()));
-                self.start_block(cont_block);
+                self.finish_block(Terminator::Jump(cont.clone()));
+                self.start_block(cont);
                 ok_dest
             }
 
             ExprKind::OrZero(inner) | ExprKind::OrNil(inner) => {
-                let val = self.lower_expr(inner);
+                let val       = self.lower_expr(inner);
+                let tag       = self.fresh_name();
+                let ok_dest   = self.fresh_name();
+                let ok_block  = self.fresh_label();
                 let zero_block = self.fresh_label();
-                let ok_dest    = self.fresh_name();
-                self.emit(Some(ok_dest.clone()), Op::UnwrapOk { val, err_block: zero_block.clone() }, span);
-                let cont_block = self.fresh_label();
-                self.finish_block(Terminator::Jump(cont_block.clone()));
+                let cont      = self.fresh_label();
+                self.emit(Some(tag.clone()), Op::GetTag(val.clone()), span);
+                let zero = self.fresh_name();
+                self.emit(Some(zero.clone()), Op::ConstInt(0), span);
+                let is_ok = self.fresh_name();
+                self.emit(Some(is_ok.clone()), Op::CmpEq(tag, zero), span);
+                self.finish_block(Terminator::Branch { cond: is_ok, then_block: ok_block.clone(), else_block: zero_block.clone() });
+                self.start_block(ok_block);
+                self.emit(Some(ok_dest.clone()), Op::GetPayload(val), span);
+                self.finish_block(Terminator::Jump(cont.clone()));
                 self.start_block(zero_block);
                 self.emit(Some(ok_dest.clone()), Op::ConstInt(0), span);
-                self.finish_block(Terminator::Jump(cont_block.clone()));
-                self.start_block(cont_block);
+                self.finish_block(Terminator::Jump(cont.clone()));
+                self.start_block(cont);
                 ok_dest
             }
 
             ExprKind::ResultCtor { variant, inner } => {
                 let v = self.lower_expr(inner);
                 let dest = self.fresh_name();
-                let op = match variant {
-                    ResultVariant::Ok  => Op::WrapOk(v),
-                    ResultVariant::Err => Op::WrapErr(v),
-                };
-                self.emit(Some(dest.clone()), op, span);
+                let tag = match variant { ResultVariant::Ok => 0, ResultVariant::Err => 1 };
+                self.emit(Some(dest.clone()), Op::MakeVariant { tag, payload: v }, span);
                 dest
             }
 
@@ -491,33 +556,78 @@ impl Lowerer {
             }
 
             ExprKind::Match { subject, arms } => {
-                let subj = self.lower_expr(subject);
+                let subj        = self.lower_expr(subject);
                 let merge_label = self.fresh_label();
                 let result_dest = self.fresh_name();
 
-                for (i, arm) in arms.iter().enumerate() {
-                    let arm_label  = self.fresh_label();
-                    let next_label = if i + 1 < arms.len() { self.fresh_label() } else { merge_label.clone() };
+                // Extract tag once for all arms.
+                let tag_val = self.fresh_name();
+                self.emit(Some(tag_val.clone()), Op::GetTag(subj.clone()), span);
 
-                    let cond = self.fresh_name();
-                    // Pattern check: wildcard / else always matches.
-                    let always_match = matches!(arm.pattern, rym_ast::expr::Pattern::Wildcard | rym_ast::expr::Pattern::Else);
-                    if always_match {
-                        self.emit(Some(cond.clone()), Op::ConstBool(true), span);
-                    } else {
-                        self.emit(Some(cond.clone()), Op::Load(subj.clone()), span);
+                // For each arm allocate a separate body block and a separate
+                // "next dispatch" block. These must be distinct: the "else" target
+                // of arm i's dispatch check is arm i+1's DISPATCH block, not its
+                // body block. Using the same block for both causes duplicate labels.
+                let body_labels: Vec<String> = (0..arms.len()).map(|_| self.fresh_label()).collect();
+                // next_dispatch[i] = where to go when arm i doesn't match.
+                // For the last arm this is the merge block.
+                let next_dispatch: Vec<String> = (0..arms.len()).map(|i| {
+                    if i + 1 < arms.len() { self.fresh_label() } else { merge_label.clone() }
+                }).collect();
+
+                for (i, arm) in arms.iter().enumerate() {
+                    use rym_ast::expr::Pattern;
+                    let body_label = body_labels[i].clone();
+                    let else_label = next_dispatch[i].clone();
+
+                    match &arm.pattern {
+                        Pattern::Wildcard | Pattern::Else => {
+                            // Always matches — jump directly to arm body.
+                            self.finish_block(Terminator::Jump(body_label.clone()));
+                        }
+                        Pattern::Variant { ty: enum_ty, variant } => {
+                            let tag_idx = self.enum_layouts.iter()
+                                .find(|e| &e.name == enum_ty)
+                                .and_then(|e| e.tag_of(variant))
+                                .or_else(|| self.enum_layouts.iter().find_map(|e| e.tag_of(variant)))
+                                .unwrap_or(0);
+                            let expected = self.fresh_name();
+                            self.emit(Some(expected.clone()), Op::ConstInt(tag_idx as i64), span);
+                            let is_match = self.fresh_name();
+                            self.emit(Some(is_match.clone()), Op::CmpEq(tag_val.clone(), expected), span);
+                            self.finish_block(Terminator::Branch {
+                                cond: is_match,
+                                then_block: body_label.clone(),
+                                else_block: else_label.clone(),
+                            });
+                        }
+                        Pattern::Lit(lit_kind) => {
+                            let lit_expr = rym_ast::expr::Expr { kind: lit_kind.clone(), span };
+                            let lit_val  = self.lower_expr(&lit_expr);
+                            let is_match = self.fresh_name();
+                            self.emit(Some(is_match.clone()), Op::CmpEq(subj.clone(), lit_val), span);
+                            self.finish_block(Terminator::Branch {
+                                cond: is_match,
+                                then_block: body_label.clone(),
+                                else_block: else_label.clone(),
+                            });
+                        }
                     }
-                    self.finish_block(Terminator::Branch {
-                        cond,
-                        then_block: arm_label.clone(),
-                        else_block: next_label.clone(),
-                    });
-                    self.start_block(arm_label);
+
+                    // Arm body block.
+                    self.start_block(body_label);
+                    if matches!(&arm.pattern, Pattern::Variant { .. }) {
+                        let payload = self.fresh_name();
+                        self.emit(Some(payload.clone()), Op::GetPayload(subj.clone()), span);
+                        self.emit(Some("__payload".into()), Op::Load(payload), span);
+                    }
                     let arm_val = self.lower_expr(&arm.body);
                     self.emit(Some(result_dest.clone()), Op::Load(arm_val), span);
                     self.finish_block(Terminator::Jump(merge_label.clone()));
+
+                    // Start the NEXT arm's dispatch block (different from the body block).
                     if i + 1 < arms.len() {
-                        self.start_block(next_label);
+                        self.start_block(next_dispatch[i].clone());
                     }
                 }
 

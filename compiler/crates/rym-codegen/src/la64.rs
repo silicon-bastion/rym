@@ -176,17 +176,57 @@ impl Codegen {
                 }
             }
 
-            Op::WrapOk(v) | Op::WrapErr(v) => {
+            Op::MakeVariant { tag, payload } => {
+                if let Some(d) = dest_reg {
+                    // Allocate 16 bytes (2 words): [tag, payload].
+                    writeln!(self.output, "\taddi.d\t$a0, $zero, 16").unwrap();
+                    writeln!(self.output, "\tbl\tmalloc").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                    writeln!(self.output, "\taddi.d\t$t8, $zero, {tag}").unwrap();
+                    writeln!(self.output, "\tst.d\t$t8, {d}, 0").unwrap();
+                    let p = ra.get(payload, &mut self.output);
+                    writeln!(self.output, "\tst.d\t{p}, {d}, 8").unwrap();
+                }
+            }
+            Op::GetTag(v) => {
                 if let Some(d) = dest_reg {
                     let s = ra.get(v, &mut self.output);
-                    if s != d { writeln!(self.output, "\tmove\t{d}, {s}").unwrap(); }
+                    writeln!(self.output, "\tld.d\t{d}, {s}, 0").unwrap();
+                }
+            }
+            Op::GetPayload(v) => {
+                if let Some(d) = dest_reg {
+                    let s = ra.get(v, &mut self.output);
+                    writeln!(self.output, "\tld.d\t{d}, {s}, 8").unwrap();
+                }
+            }
+
+            Op::WrapOk(v) => {
+                if let Some(d) = dest_reg {
+                    writeln!(self.output, "\taddi.d\t$a0, $zero, 16").unwrap();
+                    writeln!(self.output, "\tbl\tmalloc").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                    writeln!(self.output, "\tst.d\t$zero, {d}, 0").unwrap();
+                    let p = ra.get(v, &mut self.output);
+                    writeln!(self.output, "\tst.d\t{p}, {d}, 8").unwrap();
+                }
+            }
+            Op::WrapErr(v) => {
+                if let Some(d) = dest_reg {
+                    writeln!(self.output, "\taddi.d\t$a0, $zero, 16").unwrap();
+                    writeln!(self.output, "\tbl\tmalloc").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                    writeln!(self.output, "\taddi.d\t$t8, $zero, 1").unwrap();
+                    writeln!(self.output, "\tst.d\t$t8, {d}, 0").unwrap();
+                    let p = ra.get(v, &mut self.output);
+                    writeln!(self.output, "\tst.d\t{p}, {d}, 8").unwrap();
                 }
             }
 
             Op::UnwrapOk { val, err_block: _ } => {
                 if let Some(d) = dest_reg {
                     let s = ra.get(val, &mut self.output);
-                    if s != d { writeln!(self.output, "\tmove\t{d}, {s}").unwrap(); }
+                    writeln!(self.output, "\tld.d\t{d}, {s}, 8").unwrap();
                 }
             }
 
