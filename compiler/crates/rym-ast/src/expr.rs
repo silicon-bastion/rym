@@ -81,6 +81,16 @@ pub enum ExprKind {
         inner:   Box<Expr>,
     },
 
+    /// Array literal: `[1, 2, 3]`
+    ArrayLit(Vec<Expr>),
+
+    /// Matrix literal: `[1,2;3,4]` — `;` separates rows, `,` separates columns.
+    /// Stored as flat row-major Vec with explicit row count.
+    MatrixLit { elems: Vec<Expr>, rows: usize, cols: usize },
+
+    /// Allocation call: `alloc.alloc(T, n)` — desugared from method syntax.
+    AllocCall { allocator: Box<Expr>, elem_ty: Ty, count: Box<Expr> },
+
     /// Type cast: `x as u64`
     Cast {
         expr: Box<Expr>,

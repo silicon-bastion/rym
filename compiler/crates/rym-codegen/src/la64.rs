@@ -233,6 +233,41 @@ impl Codegen {
                 }
             }
 
+            Op::ArrayLit(elems) => {
+                if let Some(d) = dest_reg {
+                    let size = elems.len() * 8;
+                    writeln!(self.output, "\taddi.d\t$sp, $sp, -{size}").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $sp").unwrap();
+                    for (i, ev) in elems.iter().enumerate() {
+                        let v = ra.get(ev, &mut self.output);
+                        writeln!(self.output, "\tst.d\t{v}, {d}, {}", i * 8).unwrap();
+                    }
+                }
+            }
+
+            Op::MatrixLit { elems, rows, cols } => {
+                if let Some(d) = dest_reg {
+                    let size = elems.len() * 8;
+                    writeln!(self.output, "\taddi.d\t$sp, $sp, -{size}\t# matrix {rows}x{cols}").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $sp").unwrap();
+                    for (i, ev) in elems.iter().enumerate() {
+                        let v = ra.get(ev, &mut self.output);
+                        writeln!(self.output, "\tst.d\t{v}, {d}, {}", i * 8).unwrap();
+                    }
+                }
+            }
+
+            Op::AllocCall { allocator, elem_ty: _, count } => {
+                if let Some(d) = dest_reg {
+                    let _ = allocator;
+                    let cnt = ra.get(count, &mut self.output);
+                    writeln!(self.output, "\tslli.d\t$a0, {cnt}, 3\t# count * 8 bytes").unwrap();
+                    // Call malloc (assume linked in).
+                    writeln!(self.output, "\tbl\tmalloc").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                }
+            }
+
             Op::Nop => {
                 writeln!(self.output, "\tnop").unwrap();
             }

@@ -429,6 +429,24 @@ impl Parser {
             let span_start = expr.span.start;
             if self.eat(TokenKind::Dot) {
                 match self.peek().clone() {
+                    // `expr.alloc(T, count)` — allocator call
+                    TokenKind::Ident(ref s) if s == "alloc" => {
+                        self.advance(); // consume 'alloc'
+                        self.expect(TokenKind::LParen)?;
+                        let elem_ty = self.parse_ty()?;
+                        self.expect(TokenKind::Comma)?;
+                        let count = self.parse_expr()?;
+                        self.expect(TokenKind::RParen)?;
+                        let end = self.span().start;
+                        expr = Expr {
+                            kind: ExprKind::AllocCall {
+                                allocator: Box::new(expr),
+                                elem_ty,
+                                count: Box::new(count),
+                            },
+                            span: Span::new(span_start, end),
+                        };
+                    }
                     TokenKind::OrReturn => {
                         self.advance();
                         self.eat(TokenKind::Question);
@@ -539,6 +557,7 @@ impl Parser {
                 }
                 Ok(Expr { kind: ExprKind::Ident(name), span })
             }
+            TokenKind::LBracket => self.parse_array_or_matrix(),
             TokenKind::If => self.parse_if(),
             TokenKind::Match => self.parse_match(),
             TokenKind::LParen => {
@@ -552,6 +571,48 @@ impl Parser {
                 found: other,
                 span,
             }),
+        }
+    }
+
+    /// Parse `[e1, e2; e3, e4]` (matrix) or `[e1, e2, e3]` (array).
+    /// `;` in the bracket signals a new row.
+    fn parse_array_or_matrix(&mut self) -> Result<Expr, ParseError> {
+        let span = self.span();
+        self.expect(TokenKind::LBracket)?;
+
+        let mut rows: Vec<Vec<Expr>> = Vec::new();
+        let mut current_row: Vec<Expr> = Vec::new();
+        let mut has_semi = false;
+
+        while !self.peek_is(TokenKind::RBracket) && !self.is_eof() {
+            if self.eat(TokenKind::Semi) {
+                has_semi = true;
+                rows.push(std::mem::take(&mut current_row));
+                continue;
+            }
+            current_row.push(self.parse_expr()?);
+            if !self.peek_is(TokenKind::Semi) && !self.peek_is(TokenKind::RBracket) {
+                self.eat(TokenKind::Comma);
+            }
+        }
+        self.expect(TokenKind::RBracket)?;
+        let end = self.span().start;
+
+        if has_semi {
+            // Matrix literal — push the last row.
+            rows.push(current_row);
+            let cols = rows.first().map(|r| r.len()).unwrap_or(0);
+            let num_rows = rows.len();
+            let elems: Vec<Expr> = rows.into_iter().flatten().collect();
+            Ok(Expr {
+                kind: ExprKind::MatrixLit { elems, rows: num_rows, cols },
+                span: Span::new(span.start, end),
+            })
+        } else {
+            Ok(Expr {
+                kind: ExprKind::ArrayLit(current_row),
+                span: Span::new(span.start, end),
+            })
         }
     }
 
@@ -692,8 +753,16 @@ impl Parser {
 
     fn parse_ty(&mut self) -> Result<Ty, ParseError> {
         let span = self.span();
-        // `[]T` — slice
+        // `[N]T` — fixed array  OR  `[]T` — slice
         if self.eat(TokenKind::LBracket) {
+            if let TokenKind::Int(n) = self.peek().clone() {
+                let size = n as usize;
+                self.advance();
+                self.expect(TokenKind::RBracket)?;
+                let elem = self.parse_ty()?;
+                let end = elem.span.end;
+                return Ok(Ty { kind: TyKind::Array { size, elem: Box::new(elem) }, span: Span::new(span.start, end) });
+            }
             self.expect(TokenKind::RBracket)?;
             let inner = self.parse_ty()?;
             let end = inner.span.end;

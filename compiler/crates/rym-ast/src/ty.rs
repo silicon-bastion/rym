@@ -38,4 +38,7 @@ pub enum TyKind {
 
     /// `Allocator` interface
     Allocator,
+
+    /// Fixed-size stack array: `[4]i32`
+    Array { size: usize, elem: Box<Ty> },
 }

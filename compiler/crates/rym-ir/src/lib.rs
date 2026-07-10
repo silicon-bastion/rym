@@ -110,6 +110,16 @@ pub enum Op {
     // ── Struct construction ────────────────────────────────────
     StructLit { ty: String, fields: Vec<(String, String)> },
 
+    // ── Array / matrix construction ────────────────────────────
+    /// Stack array literal: `[a, b, c]` — elems are SSA names.
+    ArrayLit(Vec<String>),
+    /// Matrix literal (row-major): `[1,2;3,4]`.
+    MatrixLit { elems: Vec<String>, rows: usize, cols: usize },
+
+    // ── Allocator ──────────────────────────────────────────────
+    /// `alloc.alloc(T, count)` — returns pointer to heap memory.
+    AllocCall { allocator: String, elem_ty: IrTy, count: String },
+
     Nop,
 }
 
@@ -139,6 +149,7 @@ pub enum IrTy {
     Option(Box<IrTy>),
     Named(String),
     Allocator,
+    Array { size: usize, elem: Box<IrTy> },
 }
 
 impl IrTy {
@@ -165,6 +176,7 @@ impl IrTy {
             IrTy::Slice(t)      => format!("[]{}", t.display()),
             IrTy::Result(ok, e) => format!("Result({}, {})", ok.display(), e.display()),
             IrTy::Option(t)     => format!("Option({})", t.display()),
+            IrTy::Array { size, elem } => format!("[{}]{}", size, elem.display()),
         }
     }
 }

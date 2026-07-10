@@ -55,6 +55,16 @@ impl CCodegen {
         self.line("");
 
         // Rym Result type (simple tagged union).
+        // String concat helper.
+        self.line("static uintptr_t __str_concat(uintptr_t a, uintptr_t b) {");
+        self.line("    str sa = (str)a; str sb = (str)b;");
+        self.line("    size_t la = strlen(sa), lb = strlen(sb);");
+        self.line("    str r = (str)malloc(la + lb + 1);");
+        self.line("    memcpy(r, sa, la); memcpy(r + la, sb, lb); r[la+lb] = 0;");
+        self.line("    return (uintptr_t)r;");
+        self.line("}");
+        self.line("");
+
         self.line("typedef struct { int is_ok; union { void* ok; void* err; } val; } RymResult;");
         self.line("#define Ok(v)  ((RymResult){ .is_ok=1, .val.ok=(void*)(uintptr_t)(v) })");
         self.line("#define Err(v) ((RymResult){ .is_ok=0, .val.err=(void*)(uintptr_t)(v) })");
@@ -274,6 +284,37 @@ impl CCodegen {
                 }
             }
 
+            Op::ArrayLit(elems) => {
+                if let Some(d) = dest {
+                    let n = elems.len();
+                    self.iline(&format!("{d} = (uintptr_t)malloc({n} * sizeof(uintptr_t));"));
+                    for (i, ev) in elems.iter().enumerate() {
+                        let v = ssa_or_var(ev);
+                        self.iline(&format!("((uintptr_t*){d})[{i}] = (uintptr_t){v};"));
+                    }
+                }
+            }
+
+            Op::MatrixLit { elems, rows, cols } => {
+                if let Some(d) = dest {
+                    let n = elems.len();
+                    self.iline(&format!("{d} = (uintptr_t)malloc({n} * sizeof(uintptr_t));  /* matrix {rows}x{cols} */"));
+                    for (i, ev) in elems.iter().enumerate() {
+                        let v = ssa_or_var(ev);
+                        self.iline(&format!("((uintptr_t*){d})[{i}] = (uintptr_t){v};"));
+                    }
+                }
+            }
+
+            Op::AllocCall { allocator, elem_ty, count } => {
+                if let Some(d) = dest {
+                    let _ = allocator;
+                    let ct = ir_ty_to_c(elem_ty);
+                    let cnt = ssa_or_var(count);
+                    self.iline(&format!("{d} = (uintptr_t)malloc((usize)({cnt}) * sizeof({ct}));"));
+                }
+            }
+
             Op::StructLit { ty, fields } => {
                 if let Some(d) = dest {
                     // Allocate on the C heap and fill fields.
@@ -294,13 +335,16 @@ impl CCodegen {
 
     fn emit_term(&mut self, term: &Terminator, func: &IrFunc) {
         let lbl = |l: &str| format!("lbl_{}_{}", func.name.replace("__", "_"), l);
+        let is_void = func.ret == IrTy::Void;
         match term {
             Terminator::Return(val) => {
                 if let Some(v) = val {
                     let s = ssa_or_var(v);
                     self.iline(&format!("return (uintptr_t){s};"));
-                } else {
+                } else if is_void {
                     self.iline("return;");
+                } else {
+                    self.iline("return 0;");
                 }
             }
             Terminator::Jump(l) => {

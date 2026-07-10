@@ -411,6 +411,32 @@ impl Lowerer {
                 dest
             }
 
+            ExprKind::ArrayLit(elems) => {
+                let elem_vals: Vec<String> = elems.iter().map(|e| self.lower_expr(e)).collect();
+                let dest = self.fresh_name();
+                self.emit(Some(dest.clone()), Op::ArrayLit(elem_vals), span);
+                dest
+            }
+
+            ExprKind::MatrixLit { elems, rows, cols } => {
+                let elem_vals: Vec<String> = elems.iter().map(|e| self.lower_expr(e)).collect();
+                let dest = self.fresh_name();
+                self.emit(Some(dest.clone()), Op::MatrixLit { elems: elem_vals, rows: *rows, cols: *cols }, span);
+                dest
+            }
+
+            ExprKind::AllocCall { allocator, elem_ty, count } => {
+                let alloc_val = self.lower_expr(allocator);
+                let count_val = self.lower_expr(count);
+                let dest = self.fresh_name();
+                self.emit(Some(dest.clone()), Op::AllocCall {
+                    allocator: alloc_val,
+                    elem_ty: lower_ty(elem_ty),
+                    count: count_val,
+                }, span);
+                dest
+            }
+
             ExprKind::StructLit { name, fields } => {
                 let field_vals: Vec<(String, String)> = fields.iter().map(|f| {
                     (f.name.clone(), self.lower_expr(&f.expr))
@@ -563,6 +589,7 @@ pub fn lower_ty(ty: &Ty) -> IrTy {
         TyKind::PtrMut(t)     => IrTy::PtrMut(Box::new(lower_ty(t))),
         TyKind::Result(ok, e) => IrTy::Result(Box::new(lower_ty(ok)), Box::new(lower_ty(e))),
         TyKind::Option(t)     => IrTy::Option(Box::new(lower_ty(t))),
+        TyKind::Array { size, elem } => IrTy::Array { size: *size, elem: Box::new(lower_ty(elem)) },
     }
 }
 

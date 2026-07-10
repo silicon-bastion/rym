@@ -18,6 +18,8 @@ pub enum ResolvedTy {
     Result(Box<ResolvedTy>, Box<ResolvedTy>),
     Option(Box<ResolvedTy>),
     Allocator,
+    /// Fixed-size stack array: `[4]i32`
+    Array { size: usize, elem: Box<ResolvedTy> },
     /// User-defined named type.
     Named(String),
     /// Not yet resolved — used as a placeholder before inference.
@@ -46,6 +48,7 @@ impl ResolvedTy {
             ResolvedTy::Str   => "str".into(),
             ResolvedTy::Void  => "void".into(),
             ResolvedTy::Allocator       => "Allocator".into(),
+            ResolvedTy::Array { size, elem } => format!("[{}]{}", size, elem.display()),
             ResolvedTy::Named(n)        => n.clone(),
             ResolvedTy::Slice(t)        => format!("[]{}", t.display()),
             ResolvedTy::Ptr(t)          => format!("*{}", t.display()),

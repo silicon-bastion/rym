@@ -1,6 +1,6 @@
 use rym_ast::{
     SourceFile,
-    expr::{Expr, ExprKind, OwnershipMode, ResultVariant},
+    expr::{Expr, ExprKind, OwnershipMode, ResultVariant, BinOp},
     item::{FnDef, Item, ItemKind},
     stmt::{Stmt, StmtKind},
     ty::{Ty, TyKind},
@@ -330,10 +330,47 @@ impl TyChecker {
                 }
             }
 
-            ExprKind::BinOp { left, right, .. } => {
+            ExprKind::ArrayLit(elems) => {
+                let elem_ty = elems.first()
+                    .map(|e| self.infer_expr(e))
+                    .unwrap_or(ResolvedTy::Unknown);
+                for e in elems.iter().skip(1) { self.infer_expr(e); }
+                let len = elems.len();
+                ResolvedTy::Array { size: len, elem: Box::new(elem_ty) }
+            }
+
+            ExprKind::MatrixLit { elems, rows, cols } => {
+                for e in elems { self.infer_expr(e); }
+                ResolvedTy::Array {
+                    size: rows * cols,
+                    elem: Box::new(ResolvedTy::I64),
+                }
+            }
+
+            ExprKind::AllocCall { allocator, elem_ty, count } => {
+                self.infer_expr(allocator);
+                self.infer_expr(count);
+                let inner = self.resolve_ty(elem_ty);
+                ResolvedTy::Ptr(Box::new(inner))
+            }
+
+            ExprKind::BinOp { op, left, right } => {
                 let lt = self.infer_expr(left);
-                self.infer_expr(right);
-                lt
+                let rt = self.infer_expr(right);
+                match op {
+                    BinOp::Concat => {
+                        if lt != ResolvedTy::Str && lt != ResolvedTy::Unknown {
+                            self.errors.push(SemaError::TypeMismatch {
+                                expected: "str".into(),
+                                found:    lt.display(),
+                                span:     left.span,
+                            });
+                        }
+                        let _ = rt;
+                        ResolvedTy::Str
+                    }
+                    _ => lt,
+                }
             }
 
             ExprKind::UnOp { expr: inner, .. } => self.infer_expr(inner),
@@ -460,6 +497,8 @@ impl TyChecker {
             TyKind::Result(ok, err) =>
                 ResolvedTy::Result(Box::new(self.resolve_ty(ok)), Box::new(self.resolve_ty(err))),
             TyKind::Option(t) => ResolvedTy::Option(Box::new(self.resolve_ty(t))),
+            TyKind::Array { size, elem } =>
+                ResolvedTy::Array { size: *size, elem: Box::new(self.resolve_ty(elem)) },
         }
     }
 
@@ -481,6 +520,8 @@ impl TyChecker {
                 self.ty_compatible(f, e),
             (ResolvedTy::PtrMut(f), ResolvedTy::PtrMut(e)) =>
                 self.ty_compatible(f, e),
+            (ResolvedTy::Array { size: fs, elem: fe }, ResolvedTy::Array { size: es, elem: ee }) =>
+                fs == es && self.ty_compatible(fe, ee),
             _ => found == expected,
         }
     }
