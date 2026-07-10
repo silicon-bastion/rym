@@ -45,6 +45,10 @@ struct Cli {
     #[arg(long)]
     runtime: Option<PathBuf>,
 
+    /// Freestanding mode: no libc; use inline syscalls and bump allocator
+    #[arg(long)]
+    no_libc: bool,
+
     /// C compiler to use (default: cc)
     #[arg(long, default_value = "cc")]
     cc: String,
@@ -200,16 +204,19 @@ fn compile_c(
 
     // Generate C source.
     let mut gen = CCodegen::new();
+    gen.freestanding = cli.no_libc;
     let mut c_src = gen.emit_module(ir);
 
-    // Inject I/O helpers when any of print/println/puts are used.
-    let needs_io = c_src.contains("__rym_print")
-        || c_src.contains("__rym_println")
-        || c_src.contains("__rym_puts");
-    if needs_io {
-        let helper = rym_codegen::c::io_helpers();
-        if let Some(pos) = c_src.find('\n') {
-            c_src.insert_str(pos + 1, helper);
+    // Inject I/O helpers for libc mode (freestanding already includes them in the prelude).
+    if !cli.no_libc {
+        let needs_io = c_src.contains("__rym_print")
+            || c_src.contains("__rym_println")
+            || c_src.contains("__rym_puts");
+        if needs_io {
+            let helper = rym_codegen::c::io_helpers();
+            if let Some(pos) = c_src.find('\n') {
+                c_src.insert_str(pos + 1, helper);
+            }
         }
     }
 
@@ -222,11 +229,11 @@ fn compile_c(
 
     // Compile with system C compiler.
     let exe = base_out.to_path_buf();
-    run_cmd(&cli.cc, &[
-        c_path.to_str().unwrap(),
-        "-O2",
-        "-o", exe.to_str().unwrap(),
-    ])?;
+    let mut cc_args: Vec<&str> = vec![c_path.to_str().unwrap(), "-O2", "-o", exe.to_str().unwrap()];
+    if cli.no_libc {
+        cc_args.extend_from_slice(&["-ffreestanding", "-nostdlib", "-static"]);
+    }
+    run_cmd(&cli.cc, &cc_args)?;
 
     // Remove intermediate .c file.
     let _ = std::fs::remove_file(&c_path);
