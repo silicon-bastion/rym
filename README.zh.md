@@ -126,6 +126,16 @@ fn 发送(响应: read 响应, 连接: 连接) -> Result(void, str) {
 
 ---
 
+## 源文件扩展名
+
+Rym 源文件使用 `.rym` 扩展名。
+
+```
+hello.rym      → rymc hello.rym → ./hello
+```
+
+---
+
 ## 编译器架构
 
 ```
@@ -139,24 +149,22 @@ fn 发送(响应: read 响应, 连接: 连接) -> Result(void, str) {
 │                                 │                │
 │                                 ▼                │
 │                            rym-sema              │
-│                       （类型检查 + 所有权验证）    │
+│           （类型检查 + 所有权验证 + import 解析   │
+│             + struct 字段布局）                   │
 │                                 │                │
 │                                 ▼                │
 │                             rym-ir               │
-│                              （优化）             │
+│                       （SSA 三地址码）            │
 │                                 │                │
-│                                 ▼                │
-│                           rym-codegen            │
-│                       （LoongArch64 汇编）        │
-└──────────────────┬──────────────┬────────────────┘
-                   │              │
-                   ▼              ▼
-             safe 环           base 环
-           （.s 汇编文本）     （直接 .o）
-                   │              │
-                   └──────┬───────┘
-                          ▼
-                    链接器 → ELF
+│                     ┌───────────┴───────────┐    │
+│                     ▼                       ▼    │
+│               rym-codegen             rym-codegen│
+│            （C 后端，跨平台）       （LA64 后端）  │
+└─────────────────────────────────────────────────┘
+          │                               │
+          ▼                               ▼
+   cc/clang → 本地可执行文件        as + ld → ELF
+   （macOS、Linux 等任意平台）      （LoongArch64 Linux）
 ```
 
 引导编译器（`rymc`）用 Rust 编写。一旦 Rym 能够编译自身，Rust 引导编译器将被替换。
@@ -169,28 +177,40 @@ fn 发送(响应: read 响应, 连接: 连接) -> Result(void, str) {
 compiler/
 ├── Cargo.toml
 └── crates/
-    ├── rymc/        编译器 CLI 入口
-    ├── rym-lexer/   词法器
+    ├── rymc/        编译器 CLI 入口与流水线驱动
+    ├── rym-lexer/   词法器（支持 Unicode 和中文标识符）
     ├── rym-ast/     AST 节点定义
-    ├── rym-parser/  解析器
-    ├── rym-sema/    语义分析与所有权验证
-    ├── rym-ir/      IR 定义与优化 Pass
-    └── rym-codegen/ LoongArch64 代码生成
-spec/                语言规范（进行中）
-stdlib/              标准库（进行中）
+    ├── rym-parser/  解析器（强制绝对平坦化规则）
+    ├── rym-sema/    类型检查、所有权分析、import 解析
+    ├── rym-ir/      SSA IR 定义、降级 Pass、struct 布局
+    └── rym-codegen/ C 后端（跨平台）+ LA64 后端
+runtime/
+    └── start.s      LA64 _start、系统调用封装（write/read/exit）
 ```
 
 ---
 
-## 构建
+## 构建与使用
 
 ```bash
 git clone https://github.com/silicon-bastion/rym
 cd rym/compiler
 cargo build --release
+cargo test          # 全部 crate 共 31 个测试
 
-# 打印词法 token 流
-./target/release/rymc --dump-tokens 路径/文件.rym
+# 编译 .rym 文件（C 后端，macOS/Linux 均可运行）
+./target/release/rymc hello.rym
+
+# 目标平台为 LoongArch64（需要 LA64 工具链或 QEMU）
+./target/release/rymc hello.rym --target la64
+
+# 查看中间形式
+./target/release/rymc hello.rym --dump-tokens
+./target/release/rymc hello.rym --dump-ast
+./target/release/rymc hello.rym --dump-ir
+
+# 只生成 C 代码，不调用编译器
+./target/release/rymc hello.rym --emit-only
 ```
 
 需要 Rust 1.80 及以上版本。
@@ -201,12 +221,15 @@ cargo build --release
 
 | 模块 | 状态 |
 |------|------|
-| 词法器 | ✅ 完成 |
+| 词法器（Unicode、中文关键字） | ✅ 完成 |
 | AST | ✅ 完成 |
-| 解析器 | 🔧 进行中 |
-| 语义分析 | 📋 计划中 |
-| IR | 📋 计划中 |
-| LoongArch64 代码生成 | 📋 计划中 |
+| 解析器（平坦化规则、完整语法） | ✅ 完成 |
+| 语义分析（类型、所有权、struct 字段） | ✅ 完成 |
+| import 解析（多文件、循环检测） | ✅ 完成 |
+| IR（SSA 三地址码、struct 布局） | ✅ 完成 |
+| C 后端（跨平台，macOS/Linux） | ✅ 完成 |
+| LA64 后端（LoongArch64 汇编） | 🔧 基础可用，暂无优化器 |
+| 字符串 / 数组 / 矩阵 / 分配器类型 | ✅ 完成 |
 | 自举 | 📋 计划中 |
 
 ---

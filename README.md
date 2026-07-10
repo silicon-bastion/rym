@@ -126,6 +126,16 @@ The key difference: Rust and Zig are general-purpose languages that happen to wo
 
 ---
 
+## Source files
+
+Rym source files use the `.rym` extension.
+
+```
+hello.rym      → rymc hello.rym → ./hello
+```
+
+---
+
 ## Compiler architecture
 
 ```
@@ -139,24 +149,22 @@ Source (.rym)
 │                                 │                │
 │                                 ▼                │
 │                            rym-sema              │
-│                     (type check + ownership)     │
+│                  (type check + ownership + import│
+│                   resolution + struct layout)    │
 │                                 │                │
 │                                 ▼                │
 │                             rym-ir               │
-│                          (optimisation)          │
+│                      (SSA three-address code)    │
 │                                 │                │
-│                                 ▼                │
-│                           rym-codegen            │
-│                        (LoongArch64 asm)         │
-└──────────────────┬──────────────┬────────────────┘
-                   │              │
-                   ▼              ▼
-             safe ring        base ring
-           (.s assembly)    (direct .o)
-                   │              │
-                   └──────┬───────┘
-                          ▼
-                    linker → ELF
+│                     ┌───────────┴───────────┐    │
+│                     ▼                       ▼    │
+│               rym-codegen             rym-codegen│
+│            (C backend, any OS)    (LA64 backend) │
+└─────────────────────────────────────────────────┘
+          │                               │
+          ▼                               ▼
+   cc/clang → native binary      as + ld → ELF
+   (macOS, Linux, any platform)  (LoongArch64 Linux)
 ```
 
 The bootstrap compiler (`rymc`) is written in Rust. Once Rym can compile itself, the Rust bootstrap is retired.
@@ -169,28 +177,40 @@ The bootstrap compiler (`rymc`) is written in Rust. Once Rym can compile itself,
 compiler/
 ├── Cargo.toml
 └── crates/
-    ├── rymc/        CLI entry point
-    ├── rym-lexer/   tokeniser
+    ├── rymc/        CLI entry point and pipeline driver
+    ├── rym-lexer/   tokeniser (Unicode-aware, Chinese identifiers)
     ├── rym-ast/     AST node definitions
-    ├── rym-parser/  token stream → AST
-    ├── rym-sema/    type checking & ownership analysis
-    ├── rym-ir/      IR definitions & optimisation passes
-    └── rym-codegen/ LoongArch64 code generation
-spec/                language specification (in progress)
-stdlib/              standard library (in progress)
+    ├── rym-parser/  token stream → AST (flatness enforcement)
+    ├── rym-sema/    type checking, ownership analysis, import resolution
+    ├── rym-ir/      SSA IR definitions, lowering pass, struct layouts
+    └── rym-codegen/ C backend (cross-platform) + LA64 backend
+runtime/
+    └── start.s      LA64 _start, syscall wrappers (write/read/exit)
 ```
 
 ---
 
-## Build
+## Build and usage
 
 ```bash
 git clone https://github.com/silicon-bastion/rym
 cd rym/compiler
 cargo build --release
+cargo test          # 31 tests across all crates
 
-# Dump tokens from a .rym file
-./target/release/rymc --dump-tokens path/to/file.rym
+# Compile a .rym file (C backend, runs on macOS/Linux)
+./target/release/rymc hello.rym
+
+# Target LoongArch64 (requires loongarch64 toolchain or QEMU)
+./target/release/rymc hello.rym --target la64
+
+# Inspect intermediate forms
+./target/release/rymc hello.rym --dump-tokens
+./target/release/rymc hello.rym --dump-ast
+./target/release/rymc hello.rym --dump-ir
+
+# Emit generated C without compiling
+./target/release/rymc hello.rym --emit-only
 ```
 
 Requires Rust 1.80+.
@@ -201,12 +221,15 @@ Requires Rust 1.80+.
 
 | Component | Status |
 |-----------|--------|
-| Lexer | ✅ Complete |
+| Lexer (Unicode, Chinese keywords) | ✅ Complete |
 | AST | ✅ Complete |
-| Parser | 🔧 In progress |
-| Semantic analysis | 📋 Planned |
-| IR | 📋 Planned |
-| LoongArch64 codegen | 📋 Planned |
+| Parser (flatness rule, all syntax) | ✅ Complete |
+| Semantic analysis (types, ownership, struct fields) | ✅ Complete |
+| Import resolution (multi-file, cycle detection) | ✅ Complete |
+| IR (SSA three-address, struct layouts) | ✅ Complete |
+| C backend (cross-platform, macOS/Linux) | ✅ Complete |
+| LA64 backend (LoongArch64 assembly) | 🔧 Basic — register alloc, no optimiser |
+| String / array / matrix / allocator types | ✅ Complete |
 | Self-hosting | 📋 Planned |
 
 ---
