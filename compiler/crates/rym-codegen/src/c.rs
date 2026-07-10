@@ -213,6 +213,11 @@ impl CCodegen {
                 let sl = ssa_or_var(slot);
                 self.iline(&format!("{sl} = (uintptr_t){s};"));
             }
+            Op::StoreDeref { ptr, src } => {
+                let p = ssa_or_var(ptr);
+                let s = ssa_or_var(src);
+                self.iline(&format!("*(uintptr_t*){p} = (uintptr_t){s};"));
+            }
 
             Op::Add(a, b) => arith!(self, dest, a, b, "+"),
             Op::Sub(a, b) => arith!(self, dest, a, b, "-"),

@@ -119,6 +119,8 @@ pub enum Op {
     Load(String),
     /// Store `src` into mutable slot `dest`.
     Store { dest: String, src: String },
+    /// Write `src` through pointer `ptr`: `*ptr = src`.
+    StoreDeref { ptr: String, src: String },
     /// Address-of: `&x`
     Ref(String),
     /// Dereference pointer: `*x`

@@ -184,8 +184,22 @@ impl Lowerer {
 
             StmtKind::Assign { target, value } => {
                 let src = self.lower_expr(value);
-                if let ExprKind::Ident(dest) = &target.kind {
-                    self.emit(None, Op::Store { dest: dest.clone(), src }, stmt.span);
+                match &target.kind {
+                    ExprKind::Ident(dest) => {
+                        self.emit(None, Op::Store { dest: dest.clone(), src }, stmt.span);
+                    }
+                    ExprKind::Deref(ptr_expr) => {
+                        let ptr = self.lower_expr(ptr_expr);
+                        self.emit(None, Op::StoreDeref { ptr, src }, stmt.span);
+                    }
+                    ExprKind::Index { base, index } => {
+                        let base_val  = self.lower_expr(base);
+                        let index_val = self.lower_expr(index);
+                        let ptr = self.fresh_name();
+                        self.emit(Some(ptr.clone()), Op::Index { base: base_val, index: index_val }, stmt.span);
+                        self.emit(None, Op::StoreDeref { ptr, src }, stmt.span);
+                    }
+                    _ => {}
                 }
             }
 

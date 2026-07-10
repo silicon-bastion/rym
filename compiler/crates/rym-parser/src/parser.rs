@@ -23,11 +23,8 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        // Strip newlines — we use them only for zone detection, handled separately.
-        let tokens = tokens
-            .into_iter()
-            .filter(|t| t.kind != TokenKind::Newline)
-            .collect();
+        // Keep newlines so binary/unary ambiguities can be resolved at the
+        // statement boundary (e.g. `*` starting the next line is unary, not binary).
         Self { tokens, pos: 0, control_depth: 0, no_struct_lit: false }
     }
 
@@ -47,6 +44,7 @@ impl Parser {
         let mut alg_zone: Vec<Stmt> = Vec::new();
         let mut in_alg = false;
 
+        self.skip_newlines();
         while !self.is_eof() {
             // `import` is always a definition.
             if self.peek_is(TokenKind::Import) {
@@ -78,6 +76,7 @@ impl Parser {
             // Anything else starts the algorithm zone.
             in_alg = true;
             alg_zone.push(self.parse_stmt()?);
+            self.skip_newlines();
         }
 
         let end = self.span();
@@ -363,8 +362,10 @@ impl Parser {
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>, ParseError> {
         let mut stmts = Vec::new();
+        self.skip_newlines();
         while !self.peek_is(TokenKind::RBrace) && !self.is_eof() {
             stmts.push(self.parse_stmt()?);
+            self.skip_newlines();
         }
         Ok(stmts)
     }
@@ -439,7 +440,8 @@ impl Parser {
     fn parse_bitand(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_cmp()?;
         // Single `&` in infix position is bitwise AND (prefix `&` is address-of).
-        while self.eat(TokenKind::Amp) {
+        // A `&` on a new line is address-of (unary), not bitwise-AND (binary).
+        while !self.on_new_line() && self.eat(TokenKind::Amp) {
             let right = self.parse_cmp()?;
             let span = Span::new(left.span.start, right.span.end);
             left = Expr { kind: ExprKind::BinOp { op: BinOp::BitAnd, left: Box::new(left), right: Box::new(right) }, span };
@@ -486,6 +488,8 @@ impl Parser {
     fn parse_add(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_mul()?;
         loop {
+            // A `-` on a new line is unary negation, not binary subtraction.
+            if self.on_new_line() { break; }
             let op = match self.peek().clone() {
                 TokenKind::Plus     => BinOp::Add,
                 TokenKind::Minus    => BinOp::Sub,
@@ -503,6 +507,8 @@ impl Parser {
     fn parse_mul(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_unary()?;
         loop {
+            // A `*` on a new line is unary (deref), not binary (mul).
+            if self.on_new_line() { break; }
             let op = match self.peek().clone() {
                 TokenKind::Star    => BinOp::Mul,
                 TokenKind::Slash   => BinOp::Div,
@@ -994,11 +1000,27 @@ impl Parser {
 
     // ── Token stream helpers ──────────────────────────────────
 
+    /// Skip over `Newline` tokens at current position.
+    fn skip_newlines(&mut self) {
+        while matches!(self.tokens.get(self.pos).map(|t| &t.kind), Some(TokenKind::Newline)) {
+            self.pos += 1;
+        }
+    }
+
+    /// Returns true if the next real token (from `peek()`) is on a new line
+    /// relative to the last consumed token — i.e. there is a `Newline` token
+    /// between `self.pos` and the next non-newline token.
+    fn on_new_line(&self) -> bool {
+        matches!(self.tokens.get(self.pos).map(|t| &t.kind), Some(TokenKind::Newline))
+    }
+
     fn peek(&self) -> &TokenKind {
-        self.tokens
-            .get(self.pos)
-            .map(|t| &t.kind)
-            .unwrap_or(&TokenKind::Eof)
+        // Skip newlines transparently.
+        let mut p = self.pos;
+        while matches!(self.tokens.get(p).map(|t| &t.kind), Some(TokenKind::Newline)) {
+            p += 1;
+        }
+        self.tokens.get(p).map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
     }
 
     fn peek_is(&self, kind: TokenKind) -> bool {
@@ -1006,13 +1028,17 @@ impl Parser {
     }
 
     fn span(&self) -> Span {
-        self.tokens
-            .get(self.pos)
-            .map(|t| t.span)
-            .unwrap_or(Span::new(0, 0))
+        // Skip newlines to get the span of the next real token.
+        let mut p = self.pos;
+        while matches!(self.tokens.get(p).map(|t| &t.kind), Some(TokenKind::Newline)) {
+            p += 1;
+        }
+        self.tokens.get(p).map(|t| t.span).unwrap_or(Span::new(0, 0))
     }
 
     fn advance(&mut self) -> &TokenKind {
+        // Skip any leading newlines first (so `advance` consumes the next real token).
+        self.skip_newlines();
         if self.pos < self.tokens.len() {
             self.pos += 1;
         }

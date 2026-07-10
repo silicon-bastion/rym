@@ -141,6 +141,11 @@ impl Codegen {
                 // Rebind dest SSA to the same register/slot as src.
                 ra.bind(dest.clone(), s);
             }
+            Op::StoreDeref { ptr, src } => {
+                let p = ra.get(ptr, &mut self.output);
+                let s = ra.get(src, &mut self.output);
+                writeln!(self.output, "\tst.d\t{s}, {p}, 0").unwrap();
+            }
 
             Op::Add(a, b) => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tadd.d\t{d}, {ra2}, {rb2}").unwrap(); } }
             Op::Sub(a, b) => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tsub.d\t{d}, {ra2}, {rb2}").unwrap(); } }
