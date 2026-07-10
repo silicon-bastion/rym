@@ -119,6 +119,10 @@ pub enum Op {
     Field { base: String, field: String, struct_ty: Option<String> },
     /// Slice index: `base[index]`
     Index { base: String, index: String },
+    /// Number of elements in a slice: `base.len`
+    SliceLen(String),
+    /// Raw data pointer of a slice: `base.ptr`
+    SlicePtr(String),
 
     // ── Calls ─────────────────────────────────────────────────
     Call { func: String, args: Vec<String> },

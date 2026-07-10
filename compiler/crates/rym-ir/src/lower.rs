@@ -161,28 +161,70 @@ impl Lowerer {
             }
 
             StmtKind::For { binding, iter, body } => {
-                let iter_val = self.lower_expr(iter);
-                let loop_label  = self.fresh_label();
+                // Lower: `for x in slice { body }`
+                //
+                //   i = 0
+                //   len = SliceLen(slice)
+                //   jump cond_block
+                // cond_block:
+                //   in_bounds = i < len
+                //   branch in_bounds → body_block, after_block
+                // body_block:
+                //   x = slice[i]
+                //   <body>
+                //   i = i + 1
+                //   jump cond_block
+                // after_block:
+
+                let slice_val   = self.lower_expr(iter);
+                let cond_label  = self.fresh_label();
                 let body_label  = self.fresh_label();
                 let after_label = self.fresh_label();
 
-                self.finish_block(Terminator::Jump(loop_label.clone()));
-                self.start_block(loop_label.clone());
+                // Counter variable — use a unique SSA name scoped to this loop.
+                let i_var = self.fresh_name();
+                let zero  = self.fresh_name();
+                self.emit(Some(zero.clone()),  Op::ConstInt(0), stmt.span);
+                self.emit(Some(i_var.clone()), Op::Load(zero),  stmt.span);
 
-                // Simple: emit one body block per loop iteration (linear model).
-                let cond = self.fresh_name();
-                self.emit(Some(cond.clone()), Op::Load(iter_val.clone()), stmt.span);
+                // len = slice.len
+                let len_val = self.fresh_name();
+                self.emit(Some(len_val.clone()), Op::SliceLen(slice_val.clone()), stmt.span);
+
+                self.finish_block(Terminator::Jump(cond_label.clone()));
+                self.start_block(cond_label.clone());
+
+                // Reload i (mutable across iterations).
+                let i_cur    = self.fresh_name();
+                let len_cur  = self.fresh_name();
+                self.emit(Some(i_cur.clone()),   Op::Load(i_var.clone()),  stmt.span);
+                self.emit(Some(len_cur.clone()), Op::Load(len_val.clone()), stmt.span);
+                let in_bounds = self.fresh_name();
+                self.emit(Some(in_bounds.clone()), Op::CmpLt(i_cur.clone(), len_cur), stmt.span);
                 self.finish_block(Terminator::Branch {
-                    cond: cond.clone(),
+                    cond:       in_bounds,
                     then_block: body_label.clone(),
                     else_block: after_label.clone(),
                 });
 
-                self.start_block(body_label.clone());
-                self.emit(Some(binding.clone()), Op::Load(cond), stmt.span);
-                for s in body { self.lower_stmt(s); }
-                self.finish_block(Terminator::Jump(loop_label));
+                self.start_block(body_label);
+                // elem = slice_data_ptr[i]  (dereference through the fat-pointer struct)
+                let data_ptr = self.fresh_name();
+                self.emit(Some(data_ptr.clone()), Op::SlicePtr(slice_val.clone()), stmt.span);
+                let elem = self.fresh_name();
+                self.emit(Some(elem.clone()), Op::Index { base: data_ptr, index: i_cur.clone() }, stmt.span);
+                self.emit(Some(binding.clone()), Op::Load(elem), stmt.span);
 
+                for s in body { self.lower_stmt(s); }
+
+                // i = i + 1
+                let one    = self.fresh_name();
+                let i_next = self.fresh_name();
+                self.emit(Some(one.clone()),    Op::ConstInt(1),                    stmt.span);
+                self.emit(Some(i_next.clone()), Op::Add(i_cur.clone(), one),        stmt.span);
+                self.emit(None,                 Op::Store { dest: i_var.clone(), src: i_next }, stmt.span);
+
+                self.finish_block(Terminator::Jump(cond_label));
                 self.start_block(after_label);
             }
 

@@ -260,6 +260,21 @@ impl Codegen {
                 }
             }
 
+            Op::SliceLen(base) => {
+                // Slice layout: [ptr: uintptr_t, len: uintptr_t] — len is at offset 8.
+                if let Some(d) = dest_reg {
+                    let b = ra.get(base, &mut self.output);
+                    writeln!(self.output, "\tld.d\t{d}, {b}, 8").unwrap();
+                }
+            }
+
+            Op::SlicePtr(base) => {
+                if let Some(d) = dest_reg {
+                    let b = ra.get(base, &mut self.output);
+                    writeln!(self.output, "\tld.d\t{d}, {b}, 0").unwrap();
+                }
+            }
+
             Op::Ref(v) => {
                 // Address-of a local: needs stack slot. Emit addi.d from $fp - slot.
                 if let Some(d) = dest_reg {

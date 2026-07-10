@@ -335,6 +335,21 @@ impl CCodegen {
                 }
             }
 
+            Op::SliceLen(base) => {
+                // Slice layout: [ptr: uintptr_t, len: uintptr_t]
+                if let Some(d) = dest {
+                    let b = ssa_or_var(base);
+                    self.iline(&format!("{d} = ((uintptr_t*){b})[1];"));
+                }
+            }
+
+            Op::SlicePtr(base) => {
+                if let Some(d) = dest {
+                    let b = ssa_or_var(base);
+                    self.iline(&format!("{d} = ((uintptr_t*){b})[0];"));
+                }
+            }
+
             Op::Ref(v) => {
                 if let Some(d) = dest {
                     let s = ssa_or_var(v);
@@ -350,12 +365,18 @@ impl CCodegen {
 
             Op::ArrayLit(elems) => {
                 if let Some(d) = dest {
+                    // Slice fat-pointer layout: [ptr: uintptr_t, len: uintptr_t]
+                    // Allocate data array, then a 2-word header storing ptr + len.
                     let n = elems.len();
-                    self.iline(&format!("{d} = (uintptr_t)malloc({n} * sizeof(uintptr_t));"));
+                    let data_tmp = format!("{d}__data");
+                    self.iline(&format!("uintptr_t* {data_tmp} = (uintptr_t*)malloc({n} * sizeof(uintptr_t));"));
                     for (i, ev) in elems.iter().enumerate() {
                         let v = ssa_or_var(ev);
-                        self.iline(&format!("((uintptr_t*){d})[{i}] = (uintptr_t){v};"));
+                        self.iline(&format!("{data_tmp}[{i}] = (uintptr_t){v};"));
                     }
+                    self.iline(&format!("{d} = (uintptr_t)malloc(2 * sizeof(uintptr_t));"));
+                    self.iline(&format!("((uintptr_t*){d})[0] = (uintptr_t){data_tmp};"));
+                    self.iline(&format!("((uintptr_t*){d})[1] = (uintptr_t){n}UL;"));
                 }
             }
 
