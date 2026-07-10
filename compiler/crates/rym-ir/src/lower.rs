@@ -128,7 +128,19 @@ impl Lowerer {
 
         let ret = lower_ty(&fn_def.ret);
 
-        for stmt in &fn_def.body {
+        // Lower body; for the last statement, if it is a bare expression and
+        // the function has a non-void return type, capture its value for the
+        // implicit return instead of discarding it.
+        let mut implicit_ret: Option<String> = None;
+        let body_len = fn_def.body.len();
+        for (i, stmt) in fn_def.body.iter().enumerate() {
+            let is_last = i + 1 == body_len;
+            if is_last && ret != IrTy::Void {
+                if let StmtKind::Expr(expr) = &stmt.kind {
+                    implicit_ret = Some(self.lower_expr(expr));
+                    continue;
+                }
+            }
             self.lower_stmt(stmt);
         }
 
@@ -140,7 +152,7 @@ impl Lowerer {
 
         // Ensure every function ends with a terminator.
         if self.instrs.iter().all(|_| true) {
-            self.finish_block(Terminator::Return(None));
+            self.finish_block(Terminator::Return(implicit_ret));
         }
 
         IrFunc {
@@ -681,10 +693,25 @@ impl Lowerer {
             }
 
             ExprKind::Block(stmts) => {
-                for s in stmts { self.lower_stmt(s); }
-                let dest = self.fresh_name();
-                self.emit(Some(dest.clone()), Op::Nop, span);
-                dest
+                // Last bare-expression is the block's value; everything else is a statement.
+                let n = stmts.len();
+                let mut block_val: Option<String> = None;
+                for (i, s) in stmts.iter().enumerate() {
+                    if i + 1 == n {
+                        if let StmtKind::Expr(expr) = &s.kind {
+                            block_val = Some(self.lower_expr(expr));
+                            continue;
+                        }
+                    }
+                    self.lower_stmt(s);
+                }
+                if let Some(v) = block_val {
+                    v
+                } else {
+                    let dest = self.fresh_name();
+                    self.emit(Some(dest.clone()), Op::Nop, span);
+                    dest
+                }
             }
 
             ExprKind::If { cond, then, else_ } => {
@@ -692,6 +719,7 @@ impl Lowerer {
                 let then_label  = self.fresh_label();
                 let else_label  = self.fresh_label();
                 let merge_label = self.fresh_label();
+                let result_dest = self.fresh_name();
 
                 self.finish_block(Terminator::Branch {
                     cond:       cond_val,
@@ -699,20 +727,26 @@ impl Lowerer {
                     else_block: else_label.clone(),
                 });
 
+                // Then branch: lower body, store result to shared dest.
                 self.start_block(then_label);
                 let then_val = self.lower_expr(then);
+                self.emit(Some(result_dest.clone()), Op::Load(then_val), span);
                 self.finish_block(Terminator::Jump(merge_label.clone()));
 
+                // Else branch: lower body (or unit), store result to shared dest.
                 self.start_block(else_label);
-                let else_val = if let Some(e) = else_ { self.lower_expr(e) } else { then_val.clone() };
+                let else_val = if let Some(e) = else_ {
+                    self.lower_expr(e)
+                } else {
+                    let nop = self.fresh_name();
+                    self.emit(Some(nop.clone()), Op::Nop, span);
+                    nop
+                };
+                self.emit(Some(result_dest.clone()), Op::Load(else_val), span);
                 self.finish_block(Terminator::Jump(merge_label.clone()));
 
                 self.start_block(merge_label);
-                let dest = self.fresh_name();
-                // Phi-like: pick then_val (simplified — a real compiler would emit a phi).
-                self.emit(Some(dest.clone()), Op::Load(then_val), span);
-                let _ = else_val;
-                dest
+                result_dest
             }
 
             ExprKind::Match { subject, arms } => {
