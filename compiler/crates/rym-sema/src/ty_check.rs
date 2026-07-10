@@ -1,6 +1,6 @@
 use rym_ast::{
     Ring, SourceFile,
-    expr::{Expr, ExprKind, OwnershipMode, ResultVariant, BinOp},
+    expr::{Expr, ExprKind, OwnershipMode, Pattern, ResultVariant, BinOp},
     item::{FnDef, Item, ItemKind},
     stmt::{Stmt, StmtKind},
     ty::{Ty, TyKind},
@@ -232,6 +232,7 @@ impl TyChecker {
 
     fn infer_expr(&mut self, expr: &Expr) -> ResolvedTy {
         match &expr.kind {
+            ExprKind::Void     => ResolvedTy::Void,
             ExprKind::Int(_)   => ResolvedTy::I64,
             ExprKind::Float(_) => ResolvedTy::F64,
             ExprKind::Bool(_)  => ResolvedTy::Bool,
@@ -516,6 +517,17 @@ impl TyChecker {
                 self.infer_expr(subject);
                 let mut arm_ty = ResolvedTy::Unknown;
                 for arm in arms {
+                    // Introduce payload binding into scope for the arm body.
+                    if let Pattern::Variant { binding: Some(name), .. } = &arm.pattern {
+                        use crate::scope::Binding;
+                        self.scope.define(name.clone(), Binding {
+                            ty:      ResolvedTy::Unknown,
+                            mode:    OwnershipMode::Read,
+                            mutable: false,
+                            moved:   false,
+                            span:    expr.span,
+                        });
+                    }
                     arm_ty = self.infer_expr(&arm.body);
                 }
                 arm_ty

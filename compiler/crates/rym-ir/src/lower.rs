@@ -377,6 +377,11 @@ impl Lowerer {
     fn lower_expr(&mut self, expr: &Expr) -> String {
         let span = expr.span;
         match &expr.kind {
+            ExprKind::Void => {
+                let dest = self.fresh_name();
+                self.emit(Some(dest.clone()), Op::ConstInt(0), span);
+                dest
+            }
             ExprKind::Int(v) => {
                 let dest = self.fresh_name();
                 self.emit(Some(dest.clone()), Op::ConstInt(*v), span);
@@ -460,7 +465,25 @@ impl Lowerer {
                         n.clone()
                     }
                     ExprKind::Field { base, field } => {
-                        // `obj.method(args)` — treat as `method(obj, args)` for now.
+                        // Check for enum variant construction: `EnumType.Variant(payload)`.
+                        if let ExprKind::Ident(type_name) = &base.kind {
+                            if let Some(layout) = self.enum_layouts.iter().find(|e| &e.name == type_name).cloned() {
+                                if let Some(tag) = layout.tag_of(field) {
+                                    // Single payload argument.
+                                    let payload = if let Some(a) = args.first() {
+                                        self.lower_expr(&a.expr)
+                                    } else {
+                                        let z = self.fresh_name();
+                                        self.emit(Some(z.clone()), Op::ConstInt(0), span);
+                                        z
+                                    };
+                                    let dest = self.fresh_name();
+                                    self.emit(Some(dest.clone()), Op::MakeVariant { tag, payload }, span);
+                                    return dest;
+                                }
+                            }
+                        }
+                        // `obj.method(args)` — treat as `method(obj, args)`.
                         let base_val = self.lower_expr(base);
                         let mut arg_vals = vec![base_val];
                         for a in args { arg_vals.push(self.lower_expr(&a.expr)); }
@@ -793,7 +816,7 @@ impl Lowerer {
                             // Always matches — jump directly to arm body.
                             self.finish_block(Terminator::Jump(body_label.clone()));
                         }
-                        Pattern::Variant { ty: enum_ty, variant } => {
+                        Pattern::Variant { ty: enum_ty, variant, .. } => {
                             let tag_idx = self.enum_layouts.iter()
                                 .find(|e| &e.name == enum_ty)
                                 .and_then(|e| e.tag_of(variant))
@@ -824,10 +847,12 @@ impl Lowerer {
 
                     // Arm body block.
                     self.start_block(body_label);
-                    if matches!(&arm.pattern, Pattern::Variant { .. }) {
+                    if let Pattern::Variant { binding, .. } = &arm.pattern {
                         let payload = self.fresh_name();
                         self.emit(Some(payload.clone()), Op::GetPayload(subj.clone()), span);
-                        self.emit(Some("__payload".into()), Op::Load(payload), span);
+                        // Bind payload to the user-named variable (if any), else to __payload.
+                        let bind_name = binding.clone().unwrap_or_else(|| "__payload".into());
+                        self.emit(Some(bind_name), Op::Load(payload), span);
                     }
                     let arm_val = self.lower_expr(&arm.body);
                     self.emit(Some(result_dest.clone()), Op::Load(arm_val), span);

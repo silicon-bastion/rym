@@ -15,6 +15,8 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    /// `void{}` — the unit/void literal value
+    Void,
 
     /// Variable reference: `x`, `解析请求`
     Ident(String),
@@ -167,8 +169,8 @@ pub enum Pattern {
     Wildcard,
     /// Literal value
     Lit(ExprKind),
-    /// Enum variant: `IO结果.成功`
-    Variant { ty: String, variant: String },
+    /// Enum variant: `Ty.Variant` or `Ty.Variant(binding)`
+    Variant { ty: String, variant: String, binding: Option<String> },
     /// Catch-all `else`
     Else,
 }

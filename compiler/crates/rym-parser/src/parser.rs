@@ -709,6 +709,14 @@ impl Parser {
                 Ok(Expr { kind: ExprKind::Asm { template, args }, span: Span::new(span.start, end) })
             }
             TokenKind::LBracket => self.parse_array_or_matrix(),
+            // `void{}` — unit value literal
+            TokenKind::Void => {
+                self.advance();
+                self.expect(TokenKind::LBrace)?;
+                self.expect(TokenKind::RBrace)?;
+                let end = self.span().start;
+                Ok(Expr { kind: ExprKind::Void, span: Span::new(span.start, end) })
+            }
             TokenKind::If => self.parse_if(),
             TokenKind::Match => self.parse_match(),
             TokenKind::LParen => {
@@ -836,7 +844,15 @@ impl Parser {
                 self.advance();
                 if self.eat(TokenKind::Dot) {
                     let variant = self.expect_ident()?;
-                    Ok(Pattern::Variant { ty, variant })
+                    // Optional payload binding: `Ty.Variant(name)`
+                    let binding = if self.eat(TokenKind::LParen) {
+                        let name = self.expect_ident()?;
+                        self.expect(TokenKind::RParen)?;
+                        Some(name)
+                    } else {
+                        None
+                    };
+                    Ok(Pattern::Variant { ty, variant, binding })
                 } else {
                     Ok(Pattern::Lit(ExprKind::Ident(ty)))
                 }
