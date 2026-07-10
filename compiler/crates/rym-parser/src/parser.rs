@@ -16,6 +16,9 @@ pub struct Parser {
     /// Rym's absolute flatness rule: max depth = 1.
     /// Entering if/for/while/loop increments this; exiting decrements it.
     control_depth: usize,
+    /// When true, suppress struct-literal parsing (used in loop/if conditions
+    /// so that `n { ... }` is not greedily consumed as a struct literal).
+    no_struct_lit: bool,
 }
 
 impl Parser {
@@ -25,7 +28,7 @@ impl Parser {
             .into_iter()
             .filter(|t| t.kind != TokenKind::Newline)
             .collect();
-        Self { tokens, pos: 0, control_depth: 0 }
+        Self { tokens, pos: 0, control_depth: 0, no_struct_lit: false }
     }
 
     /// Parse a complete source file.
@@ -276,13 +279,50 @@ impl Parser {
                 }
                 let binding = self.expect_ident()?;
                 self.expect(TokenKind::In)?;
+                self.no_struct_lit = true;
                 let iter = self.parse_expr()?;
+                self.no_struct_lit = false;
                 self.control_depth += 1;
                 self.expect(TokenKind::LBrace)?;
                 let body = self.parse_block()?;
                 self.expect(TokenKind::RBrace)?;
                 self.control_depth -= 1;
                 Ok(Stmt { kind: StmtKind::For { binding, iter, body }, span })
+            }
+            TokenKind::While => {
+                self.advance();
+                if self.control_depth >= 1 {
+                    return Err(ParseError::IllegalNesting { span });
+                }
+                self.no_struct_lit = true;
+                let cond = self.parse_expr()?;
+                self.no_struct_lit = false;
+                self.control_depth += 1;
+                self.expect(TokenKind::LBrace)?;
+                let body = self.parse_block()?;
+                self.expect(TokenKind::RBrace)?;
+                self.control_depth -= 1;
+                Ok(Stmt { kind: StmtKind::While { cond, body }, span })
+            }
+            TokenKind::Loop => {
+                self.advance();
+                if self.control_depth >= 1 {
+                    return Err(ParseError::IllegalNesting { span });
+                }
+                self.control_depth += 1;
+                self.expect(TokenKind::LBrace)?;
+                let body = self.parse_block()?;
+                self.expect(TokenKind::RBrace)?;
+                self.control_depth -= 1;
+                Ok(Stmt { kind: StmtKind::Loop(body), span })
+            }
+            TokenKind::Break => {
+                self.advance();
+                Ok(Stmt { kind: StmtKind::Break, span })
+            }
+            TokenKind::Continue => {
+                self.advance();
+                Ok(Stmt { kind: StmtKind::Continue, span })
             }
             _ => {
                 // Expression statement (including pipelines and assignments).
@@ -333,17 +373,64 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_cmp()?;
+        let mut left = self.parse_bitor()?;
         while self.eat(TokenKind::And) {
-            let right = self.parse_cmp()?;
+            let right = self.parse_bitor()?;
             let span = Span::new(left.span.start, right.span.end);
             left = Expr { kind: ExprKind::BinOp { op: BinOp::And, left: Box::new(left), right: Box::new(right) }, span };
         }
         Ok(left)
     }
 
-    fn parse_cmp(&mut self) -> Result<Expr, ParseError> {
+    fn parse_bitor(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_bitxor()?;
+        while self.eat(TokenKind::BitOr) {
+            let right = self.parse_bitxor()?;
+            let span = Span::new(left.span.start, right.span.end);
+            left = Expr { kind: ExprKind::BinOp { op: BinOp::BitOr, left: Box::new(left), right: Box::new(right) }, span };
+        }
+        Ok(left)
+    }
+
+    fn parse_bitxor(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_bitand()?;
+        while self.eat(TokenKind::Caret) {
+            let right = self.parse_bitand()?;
+            let span = Span::new(left.span.start, right.span.end);
+            left = Expr { kind: ExprKind::BinOp { op: BinOp::BitXor, left: Box::new(left), right: Box::new(right) }, span };
+        }
+        Ok(left)
+    }
+
+    fn parse_bitand(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_cmp()?;
+        // Single `&` in infix position is bitwise AND (prefix `&` is address-of).
+        while self.eat(TokenKind::Amp) {
+            let right = self.parse_cmp()?;
+            let span = Span::new(left.span.start, right.span.end);
+            left = Expr { kind: ExprKind::BinOp { op: BinOp::BitAnd, left: Box::new(left), right: Box::new(right) }, span };
+        }
+        Ok(left)
+    }
+
+    fn parse_shift(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_add()?;
+        loop {
+            let op = match self.peek().clone() {
+                TokenKind::Shl => BinOp::Shl,
+                TokenKind::Shr => BinOp::Shr,
+                _              => break,
+            };
+            self.advance();
+            let right = self.parse_add()?;
+            let span = Span::new(left.span.start, right.span.end);
+            left = Expr { kind: ExprKind::BinOp { op, left: Box::new(left), right: Box::new(right) }, span };
+        }
+        Ok(left)
+    }
+
+    fn parse_cmp(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_shift()?;
         loop {
             let op = match self.peek().clone() {
                 TokenKind::Eq    => BinOp::Eq,
@@ -355,7 +442,7 @@ impl Parser {
                 _                => break,
             };
             self.advance();
-            let right = self.parse_add()?;
+            let right = self.parse_shift()?;
             let span = Span::new(left.span.start, right.span.end);
             left = Expr { kind: ExprKind::BinOp { op, left: Box::new(left), right: Box::new(right) }, span };
         }
@@ -402,6 +489,11 @@ impl Parser {
             let expr = self.parse_unary()?;
             let end = expr.span.end;
             return Ok(Expr { kind: ExprKind::UnOp { op: UnOp::Not, expr: Box::new(expr) }, span: Span::new(span.start, end) });
+        }
+        if self.eat(TokenKind::Tilde) {
+            let expr = self.parse_unary()?;
+            let end = expr.span.end;
+            return Ok(Expr { kind: ExprKind::UnOp { op: UnOp::BitNot, expr: Box::new(expr) }, span: Span::new(span.start, end) });
         }
         if self.eat(TokenKind::Minus) {
             let expr = self.parse_unary()?;
@@ -495,6 +587,10 @@ impl Parser {
                 let args = self.parse_call_args()?;
                 let end = self.span().start;
                 expr = Expr { kind: ExprKind::Call { callee: Box::new(expr), args }, span: Span::new(span_start, end) };
+            } else if self.eat(TokenKind::As) {
+                let ty = self.parse_ty()?;
+                let end = self.span().start;
+                expr = Expr { kind: ExprKind::Cast { expr: Box::new(expr), ty }, span: Span::new(span_start, end) };
             } else {
                 break;
             }
@@ -544,7 +640,7 @@ impl Parser {
                 // Only treat `{` as a struct literal if the interior starts with `}` (empty)
                 // or `Ident =` (field initializer). This prevents match/if subjects from
                 // being greedily consumed as struct literals.
-                if self.peek_is(TokenKind::LBrace) && self.is_struct_lit_opening() {
+                if !self.no_struct_lit && self.peek_is(TokenKind::LBrace) && self.is_struct_lit_opening() {
                     self.advance();
                     let mut fields = Vec::new();
                     while !self.peek_is(TokenKind::RBrace) {
@@ -634,10 +730,9 @@ impl Parser {
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let span = self.span();
         self.expect(TokenKind::If)?;
-        if self.control_depth >= 1 {
-            return Err(ParseError::IllegalNesting { span });
-        }
+        self.no_struct_lit = true;
         let cond = self.parse_expr()?;
+        self.no_struct_lit = false;
         self.control_depth += 1;
         self.expect(TokenKind::LBrace)?;
         let then_stmts = self.parse_block()?;
@@ -665,10 +760,9 @@ impl Parser {
     fn parse_match(&mut self) -> Result<Expr, ParseError> {
         let span = self.span();
         self.expect(TokenKind::Match)?;
-        if self.control_depth >= 1 {
-            return Err(ParseError::IllegalNesting { span });
-        }
+        self.no_struct_lit = true;
         let subject = self.parse_expr()?;
+        self.no_struct_lit = false;
         self.control_depth += 1;
         self.expect(TokenKind::LBrace)?;
         let mut arms = Vec::new();

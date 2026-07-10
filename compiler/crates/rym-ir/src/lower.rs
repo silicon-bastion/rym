@@ -28,6 +28,8 @@ pub struct Lowerer {
     slice_vars: std::collections::HashSet<String>,
     /// Variable names whose type is a function pointer — used to emit CallIndirect.
     fn_ptr_vars: std::collections::HashSet<String>,
+    /// Stack of (break_label, continue_label) for nested loops.
+    loop_stack: Vec<(String, String)>,
 }
 
 impl Lowerer {
@@ -42,6 +44,7 @@ impl Lowerer {
             deferred:      Vec::new(),
             slice_vars:    std::collections::HashSet::new(),
             fn_ptr_vars:   std::collections::HashSet::new(),
+            loop_stack:    Vec::new(),
         }
     }
 
@@ -275,8 +278,10 @@ impl Lowerer {
                     else_block: after_label.clone(),
                 });
 
+                self.loop_stack.push((after_label.clone(), cond_label.clone()));
                 self.start_block(body_label);
                 for s in body { self.lower_stmt(s); }
+                self.loop_stack.pop();
                 self.finish_block(Terminator::Jump(cond_label));
 
                 self.start_block(after_label);
@@ -287,11 +292,30 @@ impl Lowerer {
                 let after_label = self.fresh_label();
 
                 self.finish_block(Terminator::Jump(loop_label.clone()));
+                self.loop_stack.push((after_label.clone(), loop_label.clone()));
                 self.start_block(loop_label.clone());
                 for s in body { self.lower_stmt(s); }
+                self.loop_stack.pop();
                 self.finish_block(Terminator::Jump(loop_label));
 
                 self.start_block(after_label);
+            }
+
+            StmtKind::Break => {
+                if let Some((break_label, _)) = self.loop_stack.last().cloned() {
+                    self.finish_block(Terminator::Jump(break_label));
+                    // Dead block for any instructions after break.
+                    let dead = self.fresh_label();
+                    self.start_block(dead);
+                }
+            }
+
+            StmtKind::Continue => {
+                if let Some((_, continue_label)) = self.loop_stack.last().cloned() {
+                    self.finish_block(Terminator::Jump(continue_label));
+                    let dead = self.fresh_label();
+                    self.start_block(dead);
+                }
             }
         }
     }
@@ -348,6 +372,11 @@ impl Lowerer {
                     BinOp::And    => Op::And(l, r),
                     BinOp::Or     => Op::Or(l, r),
                     BinOp::Concat => Op::Call { func: "__str_concat".into(), args: vec![l, r] },
+                    BinOp::BitAnd => Op::BitAnd(l, r),
+                    BinOp::BitOr  => Op::BitOr(l, r),
+                    BinOp::BitXor => Op::BitXor(l, r),
+                    BinOp::Shl    => Op::Shl(l, r),
+                    BinOp::Shr    => Op::Shr(l, r),
                 };
                 self.emit(Some(dest.clone()), ir_op, span);
                 dest
@@ -357,9 +386,10 @@ impl Lowerer {
                 let v = self.lower_expr(inner);
                 let dest = self.fresh_name();
                 let ir_op = match op {
-                    UnOp::Not   => Op::Not(v),
-                    UnOp::Neg   => Op::Neg(v),
-                    UnOp::Deref => Op::Deref(v),
+                    UnOp::Not    => Op::Not(v),
+                    UnOp::Neg    => Op::Neg(v),
+                    UnOp::BitNot => Op::BitNot(v),
+                    UnOp::Deref  => Op::Deref(v),
                 };
                 self.emit(Some(dest.clone()), ir_op, span);
                 dest
@@ -786,6 +816,7 @@ impl Lowerer {
         self.deferred.clear();
         self.slice_vars.clear();
         self.fn_ptr_vars.clear();
+        self.loop_stack.clear();
         self.current_label = "entry".into();
         let _ = name;
     }

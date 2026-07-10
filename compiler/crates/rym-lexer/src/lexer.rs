@@ -141,6 +141,9 @@ impl<'src> Lexer<'src> {
                 if self.current() == Some('=') {
                     self.advance();
                     TokenKind::LtEq
+                } else if self.current() == Some('<') {
+                    self.advance();
+                    TokenKind::Shl
                 } else {
                     TokenKind::Lt
                 }
@@ -149,6 +152,9 @@ impl<'src> Lexer<'src> {
                 if self.current() == Some('=') {
                     self.advance();
                     TokenKind::GtEq
+                } else if self.current() == Some('>') {
+                    self.advance();
+                    TokenKind::Shr
                 } else {
                     TokenKind::Gt
                 }
@@ -158,9 +164,13 @@ impl<'src> Lexer<'src> {
                     self.advance();
                     TokenKind::And
                 } else {
+                    // Single `&` is lexed as Amp; parser context disambiguates
+                    // between address-of (prefix) and bitwise AND (infix).
                     TokenKind::Amp
                 }
             }
+            '^' => TokenKind::Caret,
+            '~' => TokenKind::Tilde,
             '|' => {
                 if self.current() == Some('>') {
                     self.advance();
@@ -169,7 +179,7 @@ impl<'src> Lexer<'src> {
                     self.advance();
                     TokenKind::Or
                 } else {
-                    return Err(LexError::UnknownChar { ch: '|', pos: start });
+                    TokenKind::BitOr
                 }
             }
             ':' => {
@@ -280,6 +290,11 @@ impl<'src> Lexer<'src> {
             "in"        => TokenKind::In,
             "return"    => TokenKind::Return,
             "defer"     => TokenKind::Defer,
+            "while"     => TokenKind::While,
+            "loop"      => TokenKind::Loop,
+            "break"     => TokenKind::Break,
+            "continue"  => TokenKind::Continue,
+            "as"        => TokenKind::As,
             "import"    => TokenKind::Import,
             "base"      => TokenKind::Base,
             "safe"      => TokenKind::Safe,

@@ -57,4 +57,10 @@ pub enum StmtKind {
 
     /// `loop { body }`
     Loop(Vec<Stmt>),
+
+    /// `break`
+    Break,
+
+    /// `continue`
+    Continue,
 }

@@ -182,11 +182,13 @@ pub enum BinOp {
     Eq, NotEq, Lt, LtEq, Gt, GtEq,
     And, Or,
     Concat, // `++` string concatenation
+    BitAnd, BitOr, BitXor, Shl, Shr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnOp {
     Neg,
     Not,
+    BitNot, // `~`
     Deref,
 }

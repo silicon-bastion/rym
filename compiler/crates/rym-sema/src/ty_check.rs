@@ -220,6 +220,8 @@ impl TyChecker {
                 self.scope.pop();
             }
 
+            StmtKind::Break | StmtKind::Continue => {}
+
             StmtKind::Expr(expr) => { self.infer_expr(expr); }
         }
     }
@@ -412,6 +414,7 @@ impl TyChecker {
             ExprKind::BinOp { op, left, right } => {
                 let lt = self.infer_expr(left);
                 let rt = self.infer_expr(right);
+                let _ = rt;
                 match op {
                     BinOp::Concat => {
                         if lt != ResolvedTy::Str && lt != ResolvedTy::Unknown {
@@ -421,9 +424,12 @@ impl TyChecker {
                                 span:     left.span,
                             });
                         }
-                        let _ = rt;
                         ResolvedTy::Str
                     }
+                    BinOp::Eq | BinOp::NotEq |
+                    BinOp::Lt | BinOp::LtEq  |
+                    BinOp::Gt | BinOp::GtEq  |
+                    BinOp::And | BinOp::Or    => ResolvedTy::Bool,
                     _ => lt,
                 }
             }

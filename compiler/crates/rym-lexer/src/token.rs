@@ -52,6 +52,13 @@ pub enum TokenKind {
     In,
     Return,
     Defer,
+    /// `asm!` — inline assembly (base ring only)
+    AsmBang,
+    While,
+    Loop,
+    Break,
+    Continue,
+    As,
     Import,
     /// Declares a file as part of the privileged `base` ring.
     Base,
@@ -117,6 +124,16 @@ pub enum TokenKind {
     // ── Arithmetic ───────────────────────────────────────────
     Plus, Minus, Slash, Percent,
 
+    // ── Bitwise ──────────────────────────────────────────────
+    /// `^` — bitwise XOR
+    Caret,
+    /// `~` — bitwise NOT
+    Tilde,
+    /// `<<` — left shift
+    Shl,
+    /// `>>` — right shift
+    Shr,
+
     // ── Comparison ───────────────────────────────────────────
     Eq, NotEq, Lt, LtEq, Gt, GtEq,
 
@@ -125,6 +142,10 @@ pub enum TokenKind {
 
     // ── Logical ──────────────────────────────────────────────
     And, Or, Not,
+
+    // ── Bitwise AND / OR (single `&` / `|` in non-prefix position) ──
+    BitAnd,
+    BitOr,
 
     // ── Delimiters ───────────────────────────────────────────
     LParen, RParen,

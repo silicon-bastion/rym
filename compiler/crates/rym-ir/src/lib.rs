@@ -106,6 +106,14 @@ pub enum Op {
     Not(String),
     Neg(String),
 
+    // ── Bitwise ──────────────────────────────────────────────
+    BitAnd(String, String),
+    BitOr(String, String),
+    BitXor(String, String),
+    Shl(String, String),
+    Shr(String, String),
+    BitNot(String),
+
     // ── Memory ───────────────────────────────────────────────
     /// Load a named SSA value.
     Load(String),

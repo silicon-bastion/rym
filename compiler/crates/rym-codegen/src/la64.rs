@@ -159,6 +159,12 @@ impl Codegen {
             Op::Or(a, b)  => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tor\t{d}, {ra2}, {rb2}").unwrap(); } }
             Op::Not(a) => { if let Some(d) = dest_reg { let s = ra.get(a, &mut self.output); writeln!(self.output, "\tsltui\t{d}, {s}, 1").unwrap(); } }
             Op::Neg(a) => { if let Some(d) = dest_reg { let s = ra.get(a, &mut self.output); writeln!(self.output, "\tsub.d\t{d}, $zero, {s}").unwrap(); } }
+            Op::BitAnd(a, b) => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tand\t{d}, {ra2}, {rb2}").unwrap(); } }
+            Op::BitOr(a, b)  => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tor\t{d}, {ra2}, {rb2}").unwrap(); } }
+            Op::BitXor(a, b) => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\txor\t{d}, {ra2}, {rb2}").unwrap(); } }
+            Op::Shl(a, b)    => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tsll.d\t{d}, {ra2}, {rb2}").unwrap(); } }
+            Op::Shr(a, b)    => { if let Some(d) = dest_reg { let (ra2, rb2) = ra.get2(a, b, &mut self.output); writeln!(self.output, "\tsrl.d\t{d}, {ra2}, {rb2}").unwrap(); } }
+            Op::BitNot(a)    => { if let Some(d) = dest_reg { let s = ra.get(a, &mut self.output); writeln!(self.output, "\tnor\t{d}, {s}, $zero").unwrap(); } }
 
             Op::Call { func: fname, args } => {
                 // Save caller-saved temps that are live (simplified: save $t0-$t7).

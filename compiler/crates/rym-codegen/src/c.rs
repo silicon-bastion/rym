@@ -242,6 +242,18 @@ impl CCodegen {
                 }
             }
 
+            Op::BitAnd(a, b) => cmp!(self, dest, a, b, "&"),
+            Op::BitOr(a, b)  => cmp!(self, dest, a, b, "|"),
+            Op::BitXor(a, b) => cmp!(self, dest, a, b, "^"),
+            Op::Shl(a, b)    => cmp!(self, dest, a, b, "<<"),
+            Op::Shr(a, b)    => cmp!(self, dest, a, b, ">>"),
+            Op::BitNot(a) => {
+                if let Some(d) = dest {
+                    let s = ssa_or_var(a);
+                    self.iline(&format!("{d} = ~{s};"));
+                }
+            }
+
             Op::Call { func: fname, args } => {
                 // `puts(slice)` — unpack fat-pointer [ptr, len] and call puts_slice.
                 if fname == "puts" && args.len() == 1 {
