@@ -8,6 +8,11 @@ license.workspace     = true
 repository.workspace  = true
 
 [dependencies]
-rym-ast   = { workspace = true }
-thiserror = { workspace = true }
-miette    = { workspace = true }
+rym-lexer  = { workspace = true }
+rym-ast    = { workspace = true }
+thiserror  = { workspace = true }
+miette     = { workspace = true }
+
+[dev-dependencies]
+rym-lexer  = { workspace = true }
+rym-parser = { workspace = true }

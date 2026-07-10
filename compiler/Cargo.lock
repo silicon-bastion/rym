@@ -345,6 +345,8 @@ version = "0.1.0"
 dependencies = [
  "miette",
  "rym-ast",
+ "rym-lexer",
+ "rym-parser",
  "thiserror",
 ]
 
