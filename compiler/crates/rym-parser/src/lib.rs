@@ -1,1 +1,5 @@
-// Parser — converts a token stream into an AST (stub).
+pub mod error;
+pub mod parser;
+
+pub use parser::Parser;
+pub use error::ParseError;
