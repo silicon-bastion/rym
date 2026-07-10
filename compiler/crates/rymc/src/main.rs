@@ -79,7 +79,12 @@ fn main() -> Result<()> {
 
     // ── Phase 2: Parse ───────────────────────────────────────
     let mut ast = RymParser::new(tokens).parse_file()
-        .map_err(|e| miette::miette!("parse error: {e}"))?;
+        .map_err(|e| {
+            let loc = e.span()
+                .map(|s| format!("{}:", line_col(&src, s.start)))
+                .unwrap_or_default();
+            miette::miette!("{} parse error: {e}", loc)
+        })?;
 
     // Resolve imports: merge each imported file's def_zone into this file.
     let base_dir = cli.input.parent().unwrap_or(Path::new("."));
@@ -93,7 +98,10 @@ fn main() -> Result<()> {
     // ── Phase 3: Semantic analysis ───────────────────────────
     let errors = TyChecker::new().check(&ast);
     if !errors.is_empty() {
-        for e in &errors { eprintln!("error: {e}"); }
+        for e in &errors {
+            let lc = line_col(&src, e.span().start);
+            eprintln!("{lc}: error: {e}");
+        }
         return Err(miette::miette!("{} semantic error(s)", errors.len()));
     }
 
@@ -251,6 +259,17 @@ fn compile_la64(
 }
 
 // ── Utilities ─────────────────────────────────────────────────
+
+/// Convert a byte offset into a `line:col` string (both 1-indexed).
+fn line_col(src: &str, offset: usize) -> String {
+    let offset = offset.min(src.len());
+    let mut line = 1usize;
+    let mut col  = 1usize;
+    for ch in src[..offset].chars() {
+        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+    }
+    format!("{line}:{col}")
+}
 
 fn find_runtime(override_path: &Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = override_path {
