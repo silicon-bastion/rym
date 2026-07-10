@@ -771,6 +771,20 @@ impl Parser {
             let end = inner.span.end;
             return Ok(Ty { kind: TyKind::Slice(Box::new(inner)), span: Span::new(span.start, end) });
         }
+        // `fn(T, U) -> R` — function pointer type
+        if self.eat(TokenKind::Fn) {
+            self.expect(TokenKind::LParen)?;
+            let mut params = Vec::new();
+            while !self.peek_is(TokenKind::RParen) {
+                params.push(self.parse_ty()?);
+                if !self.eat(TokenKind::Comma) { break; }
+            }
+            self.expect(TokenKind::RParen)?;
+            self.expect(TokenKind::Arrow)?;
+            let ret = self.parse_ty()?;
+            let end = ret.span.end;
+            return Ok(Ty { kind: TyKind::FnPtr { params, ret: Box::new(ret) }, span: Span::new(span.start, end) });
+        }
         // `*mut T` / `*T`
         if self.eat(TokenKind::Star) {
             if self.eat(TokenKind::Mut) {

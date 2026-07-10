@@ -41,4 +41,7 @@ pub enum TyKind {
 
     /// Fixed-size stack array: `[4]i32`
     Array { size: usize, elem: Box<Ty> },
+
+    /// Function pointer: `fn(T, U) -> R`
+    FnPtr { params: Vec<Ty>, ret: Box<Ty> },
 }

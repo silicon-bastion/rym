@@ -128,6 +128,8 @@ pub enum Op {
 
     // ── Calls ─────────────────────────────────────────────────
     Call { func: String, args: Vec<String> },
+    /// Indirect call through a function pointer variable.
+    CallIndirect { fp: String, args: Vec<String> },
 
     // ── Enum / tagged-union construction ─────────────────────
     /// Build an enum value: `{ tag, payload }` where tag is the variant index.
@@ -191,6 +193,8 @@ pub enum IrTy {
     Named(String),
     Allocator,
     Array { size: usize, elem: Box<IrTy> },
+    /// Function pointer — represented as uintptr_t at IR level.
+    FnPtr { params: Vec<IrTy>, ret: Box<IrTy> },
 }
 
 impl IrTy {
@@ -218,6 +222,10 @@ impl IrTy {
             IrTy::Result(ok, e) => format!("Result({}, {})", ok.display(), e.display()),
             IrTy::Option(t)     => format!("Option({})", t.display()),
             IrTy::Array { size, elem } => format!("[{}]{}", size, elem.display()),
+            IrTy::FnPtr { params, ret } => {
+                let ps = params.iter().map(|p| p.display()).collect::<Vec<_>>().join(", ");
+                format!("fn({}) -> {}", ps, ret.display())
+            }
         }
     }
 }

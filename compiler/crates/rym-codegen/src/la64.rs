@@ -176,6 +176,23 @@ impl Codegen {
                 }
             }
 
+            Op::CallIndirect { fp, args } => {
+                // Load function pointer into $t8, then jirl.
+                let f = ra.get(fp, &mut self.output);
+                for (i, arg) in args.iter().take(ARG_REGS.len()).enumerate() {
+                    let s = ra.get(arg, &mut self.output);
+                    if s != ARG_REGS[i] {
+                        writeln!(self.output, "\tmove\t{}, {s}", ARG_REGS[i]).unwrap();
+                    }
+                }
+                writeln!(self.output, "\tjirl\t$ra, {f}, 0").unwrap();
+                if let Some(d) = dest_reg {
+                    if d != "$a0" {
+                        writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                    }
+                }
+            }
+
             Op::MakeVariant { tag, payload } => {
                 if let Some(d) = dest_reg {
                     // Allocate 16 bytes (2 words): [tag, payload].

@@ -269,6 +269,23 @@ impl CCodegen {
                 }
             }
 
+            Op::CallIndirect { fp, args } => {
+                let f = ssa_or_var(fp);
+                let arg_str = args.iter().map(|a| ssa_or_var(a)).collect::<Vec<_>>().join(", ");
+                // Build a typed function pointer cast matching the actual argument count.
+                let param_types = std::iter::repeat("uintptr_t")
+                    .take(args.len())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let fn_ty = format!("uintptr_t (*)({param_types})");
+                if let Some(d) = dest {
+                    self.iline(&format!("{d} = (({fn_ty}){f})({arg_str});"));
+                } else {
+                    let void_fn_ty = format!("void (*)({param_types})");
+                    self.iline(&format!("(({void_fn_ty}){f})({arg_str});"));
+                }
+            }
+
             Op::MakeVariant { tag, payload } => {
                 if let Some(d) = dest {
                     let p = ssa_or_var(payload);

@@ -26,6 +26,8 @@ pub struct Lowerer {
     deferred: Vec<Expr>,
     /// Variable names whose type is a slice ([]T) — used to pick SliceLen vs StrLen.
     slice_vars: std::collections::HashSet<String>,
+    /// Variable names whose type is a function pointer — used to emit CallIndirect.
+    fn_ptr_vars: std::collections::HashSet<String>,
 }
 
 impl Lowerer {
@@ -39,6 +41,7 @@ impl Lowerer {
             enum_layouts:  Vec::new(),
             deferred:      Vec::new(),
             slice_vars:    std::collections::HashSet::new(),
+            fn_ptr_vars:   std::collections::HashSet::new(),
         }
     }
 
@@ -107,9 +110,11 @@ impl Lowerer {
         self.reset_fn(&fn_def.name);
 
         let params: Vec<IrParam> = fn_def.params.iter().map(|p| {
-            // Track slice-typed parameters so .len can emit SliceLen instead of StrLen.
             if matches!(p.ty.kind, TyKind::Slice(_)) {
                 self.slice_vars.insert(p.name.clone());
+            }
+            if matches!(p.ty.kind, TyKind::FnPtr { .. }) {
+                self.fn_ptr_vars.insert(p.name.clone());
             }
             IrParam {
                 name: p.name.clone(),
@@ -148,10 +153,12 @@ impl Lowerer {
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
             StmtKind::Let { name, ty, init } | StmtKind::Var { name, ty, init } => {
-                // Track slice-typed bindings for .len dispatch.
                 if let Some(t) = ty {
                     if matches!(t.kind, TyKind::Slice(_)) {
                         self.slice_vars.insert(name.clone());
+                    }
+                    if matches!(t.kind, TyKind::FnPtr { .. }) {
+                        self.fn_ptr_vars.insert(name.clone());
                     }
                 } else if matches!(init.kind, ExprKind::ArrayLit(_)) {
                     self.slice_vars.insert(name.clone());
@@ -360,7 +367,17 @@ impl Lowerer {
 
             ExprKind::Call { callee, args } => {
                 let func = match &callee.kind {
-                    ExprKind::Ident(n) => n.clone(),
+                    ExprKind::Ident(n) => {
+                        // If the callee name is a known fn-ptr variable, emit CallIndirect.
+                        if self.fn_ptr_vars.contains(n) {
+                            let fp_val = self.lower_expr(callee);
+                            let arg_vals: Vec<String> = args.iter().map(|a| self.lower_expr(&a.expr)).collect();
+                            let dest = self.fresh_name();
+                            self.emit(Some(dest.clone()), Op::CallIndirect { fp: fp_val, args: arg_vals }, span);
+                            return dest;
+                        }
+                        n.clone()
+                    }
                     ExprKind::Field { base, field } => {
                         // `obj.method(args)` — treat as `method(obj, args)` for now.
                         let base_val = self.lower_expr(base);
@@ -762,6 +779,7 @@ impl Lowerer {
         self.blocks.clear();
         self.deferred.clear();
         self.slice_vars.clear();
+        self.fn_ptr_vars.clear();
         self.current_label = "entry".into();
         let _ = name;
     }
@@ -807,6 +825,10 @@ pub fn lower_ty(ty: &Ty) -> IrTy {
         TyKind::Result(ok, e) => IrTy::Result(Box::new(lower_ty(ok)), Box::new(lower_ty(e))),
         TyKind::Option(t)     => IrTy::Option(Box::new(lower_ty(t))),
         TyKind::Array { size, elem } => IrTy::Array { size: *size, elem: Box::new(lower_ty(elem)) },
+        TyKind::FnPtr { params, ret } => IrTy::FnPtr {
+            params: params.iter().map(lower_ty).collect(),
+            ret:    Box::new(lower_ty(ret)),
+        },
     }
 }
 

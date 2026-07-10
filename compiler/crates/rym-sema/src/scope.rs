@@ -22,6 +22,8 @@ pub enum ResolvedTy {
     Array { size: usize, elem: Box<ResolvedTy> },
     /// User-defined named type.
     Named(String),
+    /// Function pointer: `fn(T, U) -> R`
+    FnPtr { params: Vec<ResolvedTy>, ret: Box<ResolvedTy> },
     /// Not yet resolved — used as a placeholder before inference.
     Unknown,
 }
@@ -55,6 +57,10 @@ impl ResolvedTy {
             ResolvedTy::PtrMut(t)       => format!("*mut {}", t.display()),
             ResolvedTy::Result(ok, err) => format!("Result({}, {})", ok.display(), err.display()),
             ResolvedTy::Option(t)       => format!("Option({})", t.display()),
+            ResolvedTy::FnPtr { params, ret } => {
+                let ps = params.iter().map(|p| p.display()).collect::<Vec<_>>().join(", ");
+                format!("fn({}) -> {}", ps, ret.display())
+            }
             ResolvedTy::Unknown         => "<unknown>".into(),
         }
     }

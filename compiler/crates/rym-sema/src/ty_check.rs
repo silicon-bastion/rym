@@ -573,6 +573,11 @@ impl TyChecker {
             TyKind::Option(t) => ResolvedTy::Option(Box::new(self.resolve_ty(t))),
             TyKind::Array { size, elem } =>
                 ResolvedTy::Array { size: *size, elem: Box::new(self.resolve_ty(elem)) },
+            TyKind::FnPtr { params, ret } =>
+                ResolvedTy::FnPtr {
+                    params: params.iter().map(|p| self.resolve_ty(p)).collect(),
+                    ret:    Box::new(self.resolve_ty(ret)),
+                },
         }
     }
 
@@ -596,6 +601,10 @@ impl TyChecker {
                 self.ty_compatible(f, e),
             (ResolvedTy::Array { size: fs, elem: fe }, ResolvedTy::Array { size: es, elem: ee }) =>
                 fs == es && self.ty_compatible(fe, ee),
+            (ResolvedTy::FnPtr { params: fp, ret: fr }, ResolvedTy::FnPtr { params: ep, ret: er }) =>
+                fp.len() == ep.len()
+                && fp.iter().zip(ep.iter()).all(|(a, b)| self.ty_compatible(a, b))
+                && self.ty_compatible(fr, er),
             _ => found == expected,
         }
     }
