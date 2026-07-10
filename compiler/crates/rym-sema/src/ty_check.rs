@@ -193,6 +193,8 @@ impl TyChecker {
                 let iter_ty = self.infer_expr(iter);
                 let elem_ty = match &iter_ty {
                     ResolvedTy::Slice(inner) => *inner.clone(),
+                    // Range iter: binding is i64
+                    ResolvedTy::I64 | ResolvedTy::Unknown => ResolvedTy::I64,
                     _ => ResolvedTy::Unknown,
                 };
                 self.scope.push();
@@ -517,6 +519,11 @@ impl TyChecker {
                     arm_ty = self.infer_expr(&arm.body);
                 }
                 arm_ty
+            }
+            ExprKind::Range { start, end } => {
+                self.infer_expr(start);
+                self.infer_expr(end);
+                ResolvedTy::I64
             }
             ExprKind::Asm { args, .. } => {
                 if self.ring != Ring::Base {

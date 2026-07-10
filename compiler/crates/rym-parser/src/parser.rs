@@ -349,7 +349,17 @@ impl Parser {
 
     /// Entry point for expression parsing — handles pipe `|>` at lowest precedence.
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.parse_pipe()
+        self.parse_range()
+    }
+
+    fn parse_range(&mut self) -> Result<Expr, ParseError> {
+        let left = self.parse_pipe()?;
+        if self.eat(TokenKind::DotDot) {
+            let right = self.parse_pipe()?;
+            let span = Span::new(left.span.start, right.span.end);
+            return Ok(Expr { kind: ExprKind::Range { start: Box::new(left), end: Box::new(right) }, span });
+        }
+        Ok(left)
     }
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {

@@ -94,6 +94,9 @@ pub enum ExprKind {
     /// Inline assembly: `asm!("template", arg0, arg1, ...)` — base ring only.
     Asm { template: String, args: Vec<Expr> },
 
+    /// Range expression: `start..end` — used as the iter in `for i in start..end`.
+    Range { start: Box<Expr>, end: Box<Expr> },
+
     /// Type cast: `x as u64`
     Cast {
         expr: Box<Expr>,

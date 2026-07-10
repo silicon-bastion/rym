@@ -197,71 +197,96 @@ impl Lowerer {
             }
 
             StmtKind::For { binding, iter, body } => {
-                // Lower: `for x in slice { body }`
-                //
-                //   i = 0
-                //   len = SliceLen(slice)
-                //   jump cond_block
-                // cond_block:
-                //   in_bounds = i < len
-                //   branch in_bounds → body_block, after_block
-                // body_block:
-                //   x = slice[i]
-                //   <body>
-                //   i = i + 1
-                //   jump cond_block
-                // after_block:
+                if let ExprKind::Range { start, end } = &iter.kind {
+                    // `for i in start..end` — integer range loop
+                    let start_val = self.lower_expr(start);
+                    let end_val   = self.lower_expr(end);
+                    let cond_label  = self.fresh_label();
+                    let body_label  = self.fresh_label();
+                    let after_label = self.fresh_label();
 
-                let slice_val   = self.lower_expr(iter);
-                let cond_label  = self.fresh_label();
-                let body_label  = self.fresh_label();
-                let after_label = self.fresh_label();
+                    let i_var = self.fresh_name();
+                    self.emit(Some(i_var.clone()), Op::Load(start_val), stmt.span);
 
-                // Counter variable — use a unique SSA name scoped to this loop.
-                let i_var = self.fresh_name();
-                let zero  = self.fresh_name();
-                self.emit(Some(zero.clone()),  Op::ConstInt(0), stmt.span);
-                self.emit(Some(i_var.clone()), Op::Load(zero),  stmt.span);
+                    let end_var = self.fresh_name();
+                    self.emit(Some(end_var.clone()), Op::Load(end_val), stmt.span);
 
-                // len = slice.len
-                let len_val = self.fresh_name();
-                self.emit(Some(len_val.clone()), Op::SliceLen(slice_val.clone()), stmt.span);
+                    self.finish_block(Terminator::Jump(cond_label.clone()));
+                    self.start_block(cond_label.clone());
 
-                self.finish_block(Terminator::Jump(cond_label.clone()));
-                self.start_block(cond_label.clone());
+                    let i_cur   = self.fresh_name();
+                    let end_cur = self.fresh_name();
+                    self.emit(Some(i_cur.clone()),   Op::Load(i_var.clone()),   stmt.span);
+                    self.emit(Some(end_cur.clone()), Op::Load(end_var.clone()), stmt.span);
+                    let in_bounds = self.fresh_name();
+                    self.emit(Some(in_bounds.clone()), Op::CmpLt(i_cur.clone(), end_cur), stmt.span);
+                    self.finish_block(Terminator::Branch {
+                        cond:       in_bounds,
+                        then_block: body_label.clone(),
+                        else_block: after_label.clone(),
+                    });
 
-                // Reload i (mutable across iterations).
-                let i_cur    = self.fresh_name();
-                let len_cur  = self.fresh_name();
-                self.emit(Some(i_cur.clone()),   Op::Load(i_var.clone()),  stmt.span);
-                self.emit(Some(len_cur.clone()), Op::Load(len_val.clone()), stmt.span);
-                let in_bounds = self.fresh_name();
-                self.emit(Some(in_bounds.clone()), Op::CmpLt(i_cur.clone(), len_cur), stmt.span);
-                self.finish_block(Terminator::Branch {
-                    cond:       in_bounds,
-                    then_block: body_label.clone(),
-                    else_block: after_label.clone(),
-                });
+                    self.loop_stack.push((after_label.clone(), cond_label.clone()));
+                    self.start_block(body_label);
+                    self.emit(Some(binding.clone()), Op::Load(i_cur.clone()), stmt.span);
+                    for s in body { self.lower_stmt(s); }
+                    self.loop_stack.pop();
 
-                self.start_block(body_label);
-                // elem = slice_data_ptr[i]  (dereference through the fat-pointer struct)
-                let data_ptr = self.fresh_name();
-                self.emit(Some(data_ptr.clone()), Op::SlicePtr(slice_val.clone()), stmt.span);
-                let elem = self.fresh_name();
-                self.emit(Some(elem.clone()), Op::Index { base: data_ptr, index: i_cur.clone() }, stmt.span);
-                self.emit(Some(binding.clone()), Op::Load(elem), stmt.span);
+                    let one    = self.fresh_name();
+                    let i_next = self.fresh_name();
+                    self.emit(Some(one.clone()),    Op::ConstInt(1),                 stmt.span);
+                    self.emit(Some(i_next.clone()), Op::Add(i_cur, one),             stmt.span);
+                    self.emit(None, Op::Store { dest: i_var, src: i_next },          stmt.span);
+                    self.finish_block(Terminator::Jump(cond_label));
+                    self.start_block(after_label);
+                } else {
+                    // `for x in slice { body }` — slice iteration
+                    let slice_val   = self.lower_expr(iter);
+                    let cond_label  = self.fresh_label();
+                    let body_label  = self.fresh_label();
+                    let after_label = self.fresh_label();
 
-                for s in body { self.lower_stmt(s); }
+                    let i_var = self.fresh_name();
+                    let zero  = self.fresh_name();
+                    self.emit(Some(zero.clone()),  Op::ConstInt(0), stmt.span);
+                    self.emit(Some(i_var.clone()), Op::Load(zero),  stmt.span);
 
-                // i = i + 1
-                let one    = self.fresh_name();
-                let i_next = self.fresh_name();
-                self.emit(Some(one.clone()),    Op::ConstInt(1),                    stmt.span);
-                self.emit(Some(i_next.clone()), Op::Add(i_cur.clone(), one),        stmt.span);
-                self.emit(None,                 Op::Store { dest: i_var.clone(), src: i_next }, stmt.span);
+                    let len_val = self.fresh_name();
+                    self.emit(Some(len_val.clone()), Op::SliceLen(slice_val.clone()), stmt.span);
 
-                self.finish_block(Terminator::Jump(cond_label));
-                self.start_block(after_label);
+                    self.finish_block(Terminator::Jump(cond_label.clone()));
+                    self.start_block(cond_label.clone());
+
+                    let i_cur   = self.fresh_name();
+                    let len_cur = self.fresh_name();
+                    self.emit(Some(i_cur.clone()),   Op::Load(i_var.clone()),   stmt.span);
+                    self.emit(Some(len_cur.clone()), Op::Load(len_val.clone()), stmt.span);
+                    let in_bounds = self.fresh_name();
+                    self.emit(Some(in_bounds.clone()), Op::CmpLt(i_cur.clone(), len_cur), stmt.span);
+                    self.finish_block(Terminator::Branch {
+                        cond:       in_bounds,
+                        then_block: body_label.clone(),
+                        else_block: after_label.clone(),
+                    });
+
+                    self.loop_stack.push((after_label.clone(), cond_label.clone()));
+                    self.start_block(body_label);
+                    let data_ptr = self.fresh_name();
+                    self.emit(Some(data_ptr.clone()), Op::SlicePtr(slice_val.clone()), stmt.span);
+                    let elem = self.fresh_name();
+                    self.emit(Some(elem.clone()), Op::Index { base: data_ptr, index: i_cur.clone() }, stmt.span);
+                    self.emit(Some(binding.clone()), Op::Load(elem), stmt.span);
+                    for s in body { self.lower_stmt(s); }
+                    self.loop_stack.pop();
+
+                    let one    = self.fresh_name();
+                    let i_next = self.fresh_name();
+                    self.emit(Some(one.clone()),    Op::ConstInt(1),                 stmt.span);
+                    self.emit(Some(i_next.clone()), Op::Add(i_cur.clone(), one),     stmt.span);
+                    self.emit(None, Op::Store { dest: i_var.clone(), src: i_next },  stmt.span);
+                    self.finish_block(Terminator::Jump(cond_label));
+                    self.start_block(after_label);
+                }
             }
 
             StmtKind::While { cond, body } => {
@@ -769,6 +794,12 @@ impl Lowerer {
                 self.start_block(merge_label);
                 result_dest
             }
+            ExprKind::Range { start, end } => {
+                // Range used as expression value (not in for-in) — emit the start value.
+                let _ = self.lower_expr(end);
+                self.lower_expr(start)
+            }
+
             ExprKind::Asm { template, args } => {
                 let lowered: Vec<String> = args.iter().map(|a| self.lower_expr(a)).collect();
                 let dest = self.fresh_name();
