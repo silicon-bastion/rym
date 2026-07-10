@@ -275,6 +275,16 @@ impl Codegen {
                 }
             }
 
+            Op::StrLen(base) => {
+                // Call libc strlen.
+                if let Some(d) = dest_reg {
+                    let b = ra.get(base, &mut self.output);
+                    writeln!(self.output, "\tmove\t$a0, {b}").unwrap();
+                    writeln!(self.output, "\tbl\tstrlen").unwrap();
+                    writeln!(self.output, "\tmove\t{d}, $a0").unwrap();
+                }
+            }
+
             Op::Ref(v) => {
                 // Address-of a local: needs stack slot. Emit addi.d from $fp - slot.
                 if let Some(d) = dest_reg {

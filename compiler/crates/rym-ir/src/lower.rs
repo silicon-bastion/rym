@@ -24,6 +24,8 @@ pub struct Lowerer {
     enum_layouts: Vec<EnumLayout>,
     /// Deferred expressions for the current function (LIFO at return/exit).
     deferred: Vec<Expr>,
+    /// Variable names whose type is a slice ([]T) — used to pick SliceLen vs StrLen.
+    slice_vars: std::collections::HashSet<String>,
 }
 
 impl Lowerer {
@@ -36,6 +38,7 @@ impl Lowerer {
             current_label: "entry".into(),
             enum_layouts:  Vec::new(),
             deferred:      Vec::new(),
+            slice_vars:    std::collections::HashSet::new(),
         }
     }
 
@@ -103,10 +106,16 @@ impl Lowerer {
     fn lower_fn(&mut self, fn_def: &FnDef) -> IrFunc {
         self.reset_fn(&fn_def.name);
 
-        let params: Vec<IrParam> = fn_def.params.iter().map(|p| IrParam {
-            name: p.name.clone(),
-            ty:   lower_ty(&p.ty),
-            mode: lower_mode(&p.mode),
+        let params: Vec<IrParam> = fn_def.params.iter().map(|p| {
+            // Track slice-typed parameters so .len can emit SliceLen instead of StrLen.
+            if matches!(p.ty.kind, TyKind::Slice(_)) {
+                self.slice_vars.insert(p.name.clone());
+            }
+            IrParam {
+                name: p.name.clone(),
+                ty:   lower_ty(&p.ty),
+                mode: lower_mode(&p.mode),
+            }
         }).collect();
 
         let ret = lower_ty(&fn_def.ret);
@@ -138,7 +147,15 @@ impl Lowerer {
 
     fn lower_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
-            StmtKind::Let { name, init, .. } | StmtKind::Var { name, init, .. } => {
+            StmtKind::Let { name, ty, init } | StmtKind::Var { name, ty, init } => {
+                // Track slice-typed bindings for .len dispatch.
+                if let Some(t) = ty {
+                    if matches!(t.kind, TyKind::Slice(_)) {
+                        self.slice_vars.insert(name.clone());
+                    }
+                } else if matches!(init.kind, ExprKind::ArrayLit(_)) {
+                    self.slice_vars.insert(name.clone());
+                }
                 let val = self.lower_expr(init);
                 self.emit(Some(name.clone()), Op::Load(val), stmt.span);
             }
@@ -399,9 +416,29 @@ impl Lowerer {
                         }
                     }
                 }
+                // Determine if base refers to a slice variable.
+                let base_is_slice = if let ExprKind::Ident(name) = &base.kind {
+                    self.slice_vars.contains(name)
+                } else {
+                    // ArrayLit expressions are always slices.
+                    matches!(base.kind, ExprKind::ArrayLit(_))
+                };
                 let base_val = self.lower_expr(base);
                 let dest = self.fresh_name();
-                self.emit(Some(dest.clone()), Op::Field { base: base_val, field: field.clone(), struct_ty: None }, span);
+                match field.as_str() {
+                    "len" if base_is_slice => {
+                        self.emit(Some(dest.clone()), Op::SliceLen(base_val), span);
+                    }
+                    "len" => {
+                        self.emit(Some(dest.clone()), Op::StrLen(base_val), span);
+                    }
+                    "ptr" => {
+                        self.emit(Some(dest.clone()), Op::SlicePtr(base_val), span);
+                    }
+                    _ => {
+                        self.emit(Some(dest.clone()), Op::Field { base: base_val, field: field.clone(), struct_ty: None }, span);
+                    }
+                }
                 dest
             }
 
@@ -724,6 +761,7 @@ impl Lowerer {
         self.instrs.clear();
         self.blocks.clear();
         self.deferred.clear();
+        self.slice_vars.clear();
         self.current_label = "entry".into();
         let _ = name;
     }

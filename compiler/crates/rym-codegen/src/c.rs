@@ -360,6 +360,13 @@ impl CCodegen {
                 }
             }
 
+            Op::StrLen(base) => {
+                if let Some(d) = dest {
+                    let b = ssa_or_var(base);
+                    self.iline(&format!("{d} = (uintptr_t)strlen((const char*){b});"));
+                }
+            }
+
             Op::Ref(v) => {
                 if let Some(d) = dest {
                     let s = ssa_or_var(v);

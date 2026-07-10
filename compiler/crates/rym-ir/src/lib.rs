@@ -123,6 +123,8 @@ pub enum Op {
     SliceLen(String),
     /// Raw data pointer of a slice: `base.ptr`
     SlicePtr(String),
+    /// Byte length of a str (via strlen): `base.len`
+    StrLen(String),
 
     // ── Calls ─────────────────────────────────────────────────
     Call { func: String, args: Vec<String> },
