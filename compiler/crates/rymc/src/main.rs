@@ -4,24 +4,28 @@ use rym_lexer::Lexer;
 use rym_parser::Parser as RymParser;
 use rym_sema::TyChecker;
 use rym_ir::lower::Lowerer;
-use rym_codegen::{Codegen, la64::dump_ir};
+use rym_codegen::{Codegen, CCodegen, la64::dump_ir};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// rymc — the Rym language bootstrap compiler
 #[derive(Parser)]
-#[command(name = "rymc", version, about = "Rym language compiler targeting LoongArch64")]
+#[command(name = "rymc", version, about = "Rym language compiler")]
 struct Cli {
     /// Source file to compile
     input: PathBuf,
 
-    /// Output executable (default: same name as input without extension)
+    /// Output file (default: same name as input without extension)
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Only emit assembly, do not link  (saves to <output>.s)
+    /// Compilation target: c (default, any platform) or la64 (LoongArch64)
+    #[arg(long, default_value = "c")]
+    target: String,
+
+    /// Only emit generated code, do not compile/link
     #[arg(long)]
-    emit_asm: bool,
+    emit_only: bool,
 
     /// Dump token stream and exit
     #[arg(long)]
@@ -35,15 +39,19 @@ struct Cli {
     #[arg(long)]
     dump_ir: bool,
 
-    /// Path to the Rym runtime start.s (auto-detected if not given)
+    /// Path to the Rym runtime start.s (la64 target only)
     #[arg(long)]
     runtime: Option<PathBuf>,
 
-    /// Assembler binary to use (default: as)
+    /// C compiler to use (default: cc)
+    #[arg(long, default_value = "cc")]
+    cc: String,
+
+    /// Assembler binary (la64 target only, default: as)
     #[arg(long, default_value = "as")]
     assembler: String,
 
-    /// Linker binary to use (default: ld)
+    /// Linker binary (la64 target only, default: ld)
     #[arg(long, default_value = "ld")]
     linker: String,
 }
@@ -63,9 +71,7 @@ fn main() -> Result<()> {
         .map_err(|e| miette::miette!("lex error: {e}"))?;
 
     if cli.dump_tokens {
-        for tok in &tokens {
-            println!("{:?}", tok);
-        }
+        for tok in &tokens { println!("{:?}", tok); }
         return Ok(());
     }
 
@@ -81,9 +87,7 @@ fn main() -> Result<()> {
     // ── Phase 3: Semantic analysis ───────────────────────────
     let errors = TyChecker::new().check(&ast);
     if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("error: {e}");
-        }
+        for e in &errors { eprintln!("error: {e}"); }
         return Err(miette::miette!("{} semantic error(s)", errors.len()));
     }
 
@@ -95,112 +99,123 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // ── Phase 5/6: Codegen → LoongArch64 assembly ────────────
-    let asm = Codegen::new().emit_module(&ir);
-
-    // Determine output paths.
     let base_out: PathBuf = cli.output.clone().unwrap_or_else(|| {
         cli.input.with_extension("")
     });
-    let asm_path = base_out.with_extension("s");
 
-    std::fs::write(&asm_path, &asm).into_diagnostic()?;
-    eprintln!("rymc: wrote assembly {}", asm_path.display());
+    match cli.target.as_str() {
+        "c" | "C" => compile_c(&cli, &ir, &base_out),
+        "la64" | "loongarch64" => compile_la64(&cli, &ir, &base_out),
+        other => Err(miette::miette!("unknown target '{other}' — use 'c' or 'la64'")),
+    }
+}
 
-    if cli.emit_asm {
+// ── C backend ────────────────────────────────────────────────
+
+fn compile_c(
+    cli: &Cli,
+    ir: &rym_ir::IrModule,
+    base_out: &Path,
+) -> Result<()> {
+    let c_path = base_out.with_extension("c");
+
+    // Generate C source.
+    let mut gen = CCodegen::new();
+    let mut c_src = gen.emit_module(ir);
+
+    // Inject println helper after the first line if needed.
+    if c_src.contains("__rym_println") {
+        let helper = rym_codegen::c::println_helper();
+        // Insert after the first newline (after the "/* Generated */" comment).
+        if let Some(pos) = c_src.find('\n') {
+            c_src.insert_str(pos + 1, helper);
+        }
+    }
+
+    std::fs::write(&c_path, &c_src).into_diagnostic()?;
+    eprintln!("rymc: wrote {}", c_path.display());
+
+    if cli.emit_only {
         return Ok(());
     }
 
-    // ── Assemble + Link ──────────────────────────────────────
-    let obj_path  = base_out.with_extension("o");
-    let rt_obj    = base_out.with_extension("rt.o");
-    let exe_path  = base_out.clone();
+    // Compile with system C compiler.
+    let exe = base_out.to_path_buf();
+    run_cmd(&cli.cc, &[
+        c_path.to_str().unwrap(),
+        "-O2",
+        "-o", exe.to_str().unwrap(),
+    ])?;
 
-    // Find runtime start.s — look next to the compiler binary first,
-    // then at a hard-coded path relative to the repo.
+    // Remove intermediate .c file.
+    let _ = std::fs::remove_file(&c_path);
+
+    eprintln!("rymc: built {}", exe.display());
+    Ok(())
+}
+
+// ── LA64 backend ─────────────────────────────────────────────
+
+fn compile_la64(
+    cli: &Cli,
+    ir: &rym_ir::IrModule,
+    base_out: &Path,
+) -> Result<()> {
+    let asm_path = base_out.with_extension("s");
+    let obj_path = base_out.with_extension("o");
+    let rt_obj   = base_out.with_extension("rt.o");
+    let exe      = base_out.to_path_buf();
+
+    let asm = Codegen::new().emit_module(ir);
+    std::fs::write(&asm_path, &asm).into_diagnostic()?;
+    eprintln!("rymc: wrote assembly {}", asm_path.display());
+
+    if cli.emit_only {
+        return Ok(());
+    }
+
     let runtime_s = find_runtime(&cli.runtime)?;
 
-    // Assemble user code.
-    run_cmd(&cli.assembler, &[
-        "-mla64v1.0",
-        asm_path.to_str().unwrap(),
-        "-o", obj_path.to_str().unwrap(),
-    ])?;
+    run_cmd(&cli.assembler, &["-mla64v1.0", asm_path.to_str().unwrap(), "-o", obj_path.to_str().unwrap()])?;
+    run_cmd(&cli.assembler, &["-mla64v1.0", runtime_s.to_str().unwrap(), "-o", rt_obj.to_str().unwrap()])?;
+    run_cmd(&cli.linker,    &["-static", rt_obj.to_str().unwrap(), obj_path.to_str().unwrap(), "-o", exe.to_str().unwrap()])?;
 
-    // Assemble runtime.
-    run_cmd(&cli.assembler, &[
-        "-mla64v1.0",
-        runtime_s.to_str().unwrap(),
-        "-o", rt_obj.to_str().unwrap(),
-    ])?;
-
-    // Link: runtime first so _start comes first.
-    run_cmd(&cli.linker, &[
-        "-static",
-        rt_obj.to_str().unwrap(),
-        obj_path.to_str().unwrap(),
-        "-o", exe_path.to_str().unwrap(),
-    ])?;
-
-    // Clean up intermediates.
     let _ = std::fs::remove_file(&obj_path);
     let _ = std::fs::remove_file(&rt_obj);
     let _ = std::fs::remove_file(&asm_path);
 
-    eprintln!("rymc: built {}", exe_path.display());
+    eprintln!("rymc: built {}", exe.display());
     Ok(())
 }
 
+// ── Utilities ─────────────────────────────────────────────────
+
 fn find_runtime(override_path: &Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = override_path {
-        if p.exists() {
-            return Ok(p.clone());
-        }
+        if p.exists() { return Ok(p.clone()); }
         return Err(miette::miette!("runtime not found at {}", p.display()));
     }
-
-    // Search order:
-    // 1. Next to the rymc binary.
-    // 2. <repo_root>/runtime/start.s  (development layout).
-    let candidates: &[&str] = &[
-        "runtime/start.s",
-        "../runtime/start.s",
-        "../../runtime/start.s",
-    ];
-
-    // Relative to current exe.
+    let candidates = ["runtime/start.s", "../runtime/start.s", "../../runtime/start.s"];
     if let Ok(exe) = std::env::current_exe() {
-        for rel in candidates {
+        for rel in &candidates {
             let p = exe.parent().unwrap_or(Path::new(".")).join(rel);
-            if p.exists() {
-                return Ok(p);
-            }
+            if p.exists() { return Ok(p); }
         }
     }
-
-    // Relative to current working directory.
-    for rel in candidates {
+    for rel in &candidates {
         let p = PathBuf::from(rel);
-        if p.exists() {
-            return Ok(p);
-        }
+        if p.exists() { return Ok(p); }
     }
-
-    Err(miette::miette!(
-        "cannot find runtime/start.s — use --runtime <path> to specify it"
-    ))
+    Err(miette::miette!("cannot find runtime/start.s — use --runtime <path>"))
 }
 
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(program)
         .args(args)
         .status()
-        .map_err(|e| miette::miette!("failed to run {program}: {e}"))?;
-
+        .map_err(|e| miette::miette!("failed to run '{program}': {e}"))?;
     if !status.success() {
-        return Err(miette::miette!(
-            "{program} exited with status {}", status
-        ));
+        return Err(miette::miette!("'{program}' exited with {status}"));
     }
     Ok(())
 }
