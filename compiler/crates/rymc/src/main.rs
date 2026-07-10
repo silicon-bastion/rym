@@ -88,7 +88,7 @@ fn main() -> Result<()> {
 
     // Resolve imports: merge each imported file's def_zone into this file.
     let base_dir = cli.input.parent().unwrap_or(Path::new("."));
-    resolve_imports(&mut ast, base_dir)?;
+    resolve_imports(&mut ast, base_dir, &src)?;
 
     if cli.dump_ast {
         println!("{:#?}", ast);
@@ -127,41 +127,52 @@ fn main() -> Result<()> {
 // ── Import resolution ─────────────────────────────────────────
 
 /// Recursively resolve `import "path"` items, merging their def_zones.
+/// Enforces ring isolation: a `safe` file cannot import a `base` file.
 /// Cycles are detected by tracking visited canonical paths.
-fn resolve_imports(file: &mut SourceFile, base_dir: &Path) -> Result<()> {
+fn resolve_imports(file: &mut SourceFile, base_dir: &Path, src: &str) -> Result<()> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
-    resolve_imports_inner(file, base_dir, &mut visited)
+    resolve_imports_inner(file, base_dir, &mut visited, src)
 }
 
 fn resolve_imports_inner(
     file: &mut SourceFile,
     base_dir: &Path,
     visited: &mut HashSet<PathBuf>,
+    importer_src: &str,
 ) -> Result<()> {
     let mut i = 0;
     while i < file.def_zone.len() {
         if let ItemKind::Import(path_str) = &file.def_zone[i].kind {
-            let path_str = path_str.clone();
+            let path_str  = path_str.clone();
+            let item_span = file.def_zone[i].span;
             let import_path = base_dir.join(&path_str);
             let canonical = import_path.canonicalize()
                 .unwrap_or_else(|_| import_path.clone());
 
             if visited.contains(&canonical) {
-                // Already merged — remove the import stub and continue.
                 file.def_zone.remove(i);
                 continue;
             }
             visited.insert(canonical.clone());
 
-            let src = std::fs::read_to_string(&import_path)
+            let imported_src = std::fs::read_to_string(&import_path)
                 .map_err(|e| miette::miette!("import '{}': {e}", import_path.display()))?;
-            let tokens = Lexer::new(&src).tokenize()
+            let tokens = Lexer::new(&imported_src).tokenize()
                 .map_err(|e| miette::miette!("import '{}' lex error: {e}", path_str))?;
             let mut imported = RymParser::new(tokens).parse_file()
                 .map_err(|e| miette::miette!("import '{}' parse error: {e}", path_str))?;
 
+            // Ring isolation: safe files may not import base files.
+            use rym_ast::Ring;
+            if file.ring == Ring::Safe && imported.ring == Ring::Base {
+                let lc = line_col(importer_src, item_span.start);
+                return Err(miette::miette!(
+                    "{lc}: ring violation: safe file cannot import base file '{path_str}'"
+                ));
+            }
+
             let import_dir = import_path.parent().unwrap_or(Path::new("."));
-            resolve_imports_inner(&mut imported, import_dir, visited)?;
+            resolve_imports_inner(&mut imported, import_dir, visited, &imported_src)?;
 
             // Remove the Import stub, splice in the imported def_zone at the same position.
             file.def_zone.remove(i);
