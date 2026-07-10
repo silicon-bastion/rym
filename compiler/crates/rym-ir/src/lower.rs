@@ -22,6 +22,8 @@ pub struct Lowerer {
     current_label: String,
     /// Enum layouts collected from the AST (variant name → tag index).
     enum_layouts: Vec<EnumLayout>,
+    /// Deferred expressions for the current function (LIFO at return/exit).
+    deferred: Vec<Expr>,
 }
 
 impl Lowerer {
@@ -33,6 +35,7 @@ impl Lowerer {
             blocks:        Vec::new(),
             current_label: "entry".into(),
             enum_layouts:  Vec::new(),
+            deferred:      Vec::new(),
         }
     }
 
@@ -112,6 +115,12 @@ impl Lowerer {
             self.lower_stmt(stmt);
         }
 
+        // Flush any remaining deferred expressions at implicit function exit.
+        let end_span = fn_def.body.last()
+            .map(|s| s.span)
+            .unwrap_or(rym_lexer::Span::new(0, 0));
+        self.flush_deferred(end_span);
+
         // Ensure every function ends with a terminator.
         if self.instrs.iter().all(|_| true) {
             self.finish_block(Terminator::Return(None));
@@ -143,7 +152,8 @@ impl Lowerer {
 
             StmtKind::Return(expr) => {
                 let val = expr.as_ref().map(|e| self.lower_expr(e));
-                // Replace current block terminator.
+                // Run deferred expressions (LIFO) before returning.
+                self.flush_deferred(stmt.span);
                 self.finish_block(Terminator::Return(val));
                 // Start a dead block so subsequent stmts don't crash.
                 let dead = self.fresh_label();
@@ -151,9 +161,8 @@ impl Lowerer {
             }
 
             StmtKind::Defer(expr) => {
-                // Defer is modeled as a no-op at IR level for now;
-                // a cleanup pass would hoist it to function exit.
-                self.lower_expr(expr);
+                // Queue for execution at function exit (LIFO order).
+                self.deferred.push(expr.clone());
             }
 
             StmtKind::Expr(expr) => {
@@ -714,8 +723,17 @@ impl Lowerer {
         self.next_block = 0;
         self.instrs.clear();
         self.blocks.clear();
+        self.deferred.clear();
         self.current_label = "entry".into();
         let _ = name;
+    }
+
+    /// Lower all deferred expressions in LIFO order (last deferred runs first).
+    fn flush_deferred(&mut self, _span: Span) {
+        let exprs: Vec<Expr> = self.deferred.drain(..).rev().collect();
+        for e in exprs {
+            self.lower_expr(&e);
+        }
     }
 }
 
