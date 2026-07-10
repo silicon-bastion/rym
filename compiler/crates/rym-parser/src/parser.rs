@@ -12,6 +12,10 @@ pub struct Parser {
     tokens: Vec<Token>,
     /// Current position in `tokens`.
     pos: usize,
+    /// Current control-flow nesting depth inside a function body.
+    /// Rym's absolute flatness rule: max depth = 1.
+    /// Entering if/for/while/loop increments this; exiting decrements it.
+    control_depth: usize,
 }
 
 impl Parser {
@@ -21,7 +25,7 @@ impl Parser {
             .into_iter()
             .filter(|t| t.kind != TokenKind::Newline)
             .collect();
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, control_depth: 0 }
     }
 
     /// Parse a complete source file.
@@ -149,8 +153,6 @@ impl Parser {
         self.expect(TokenKind::Fn)?;
         let name = self.expect_ident()?;
 
-        // Collect `@attr` decorators that precede the fn (already consumed above
-        // in parse_compiler_ext_item). Here we handle bare fns with no attrs.
         let attrs: Vec<Attr> = Vec::new();
 
         self.expect(TokenKind::LParen)?;
@@ -166,9 +168,15 @@ impl Parser {
         self.expect(TokenKind::Arrow)?;
         let ret = self.parse_ty()?;
 
+        // Reset nesting depth for each new function body.
+        let saved_depth = self.control_depth;
+        self.control_depth = 0;
+
         self.expect(TokenKind::LBrace)?;
         let body = self.parse_block()?;
         self.expect(TokenKind::RBrace)?;
+
+        self.control_depth = saved_depth;
 
         Ok(FnDef { name, params, ret, body, attrs })
     }
@@ -263,12 +271,17 @@ impl Parser {
             }
             TokenKind::For => {
                 self.advance();
+                if self.control_depth >= 1 {
+                    return Err(ParseError::IllegalNesting { span });
+                }
                 let binding = self.expect_ident()?;
                 self.expect(TokenKind::In)?;
                 let iter = self.parse_expr()?;
+                self.control_depth += 1;
                 self.expect(TokenKind::LBrace)?;
                 let body = self.parse_block()?;
                 self.expect(TokenKind::RBrace)?;
+                self.control_depth -= 1;
                 Ok(Stmt { kind: StmtKind::For { binding, iter, body }, span })
             }
             _ => {
@@ -545,7 +558,11 @@ impl Parser {
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let span = self.span();
         self.expect(TokenKind::If)?;
+        if self.control_depth >= 1 {
+            return Err(ParseError::IllegalNesting { span });
+        }
         let cond = self.parse_expr()?;
+        self.control_depth += 1;
         self.expect(TokenKind::LBrace)?;
         let then_stmts = self.parse_block()?;
         self.expect(TokenKind::RBrace)?;
@@ -561,6 +578,7 @@ impl Parser {
         } else {
             None
         };
+        self.control_depth -= 1;
         let end = self.span().start;
         Ok(Expr {
             kind: ExprKind::If { cond: Box::new(cond), then: Box::new(then_expr), else_ : else_expr },
@@ -571,7 +589,11 @@ impl Parser {
     fn parse_match(&mut self) -> Result<Expr, ParseError> {
         let span = self.span();
         self.expect(TokenKind::Match)?;
+        if self.control_depth >= 1 {
+            return Err(ParseError::IllegalNesting { span });
+        }
         let subject = self.parse_expr()?;
+        self.control_depth += 1;
         self.expect(TokenKind::LBrace)?;
         let mut arms = Vec::new();
         while !self.peek_is(TokenKind::RBrace) {
@@ -582,6 +604,7 @@ impl Parser {
             self.eat(TokenKind::Comma);
         }
         self.expect(TokenKind::RBrace)?;
+        self.control_depth -= 1;
         let end = self.span().start;
         Ok(Expr {
             kind: ExprKind::Match { subject: Box::new(subject), arms },
