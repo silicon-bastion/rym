@@ -318,6 +318,7 @@ name = "rym-ir"
 version = "0.1.0"
 dependencies = [
  "rym-ast",
+ "rym-lexer",
  "thiserror",
 ]
 

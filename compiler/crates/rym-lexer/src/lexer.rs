@@ -286,6 +286,8 @@ impl<'src> Lexer<'src> {
             "or_panic"  => TokenKind::OrPanic,
             "or_zero"   => TokenKind::OrZero,
             "or_nil"    => TokenKind::OrNil,
+            "let"       => TokenKind::Let,
+            "var"       => TokenKind::Var,
             // Chinese reserved keywords
             "定"        => TokenKind::Ding,
             "设"        => TokenKind::She,

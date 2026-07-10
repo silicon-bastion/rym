@@ -1,1 +1,3 @@
-// LoongArch64 code generation backend (stub).
+pub mod la64;
+
+pub use la64::Codegen;

@@ -8,5 +8,6 @@ license.workspace     = true
 repository.workspace  = true
 
 [dependencies]
+rym-lexer = { workspace = true }
 rym-ast   = { workspace = true }
 thiserror = { workspace = true }

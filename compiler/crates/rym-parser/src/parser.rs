@@ -229,8 +229,8 @@ impl Parser {
     fn parse_stmt(&mut self) -> Result<Stmt, ParseError> {
         let span = self.span();
         match self.peek().clone() {
-            // 定 — immutable binding
-            TokenKind::Ding => {
+            // 定 / let — immutable binding
+            TokenKind::Ding | TokenKind::Let => {
                 self.advance();
                 let name = self.expect_ident()?;
                 let ty = if self.eat(TokenKind::Colon) { Some(self.parse_ty()?) } else { None };
@@ -238,8 +238,8 @@ impl Parser {
                 let init = self.parse_expr()?;
                 Ok(Stmt { kind: StmtKind::Let { name, ty, init }, span })
             }
-            // 设 — mutable binding
-            TokenKind::She => {
+            // 设 / var — mutable binding
+            TokenKind::She | TokenKind::Var => {
                 self.advance();
                 let name = self.expect_ident()?;
                 let ty = if self.eat(TokenKind::Colon) { Some(self.parse_ty()?) } else { None };

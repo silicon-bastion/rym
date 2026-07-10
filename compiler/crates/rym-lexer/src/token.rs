@@ -70,6 +70,12 @@ pub enum TokenKind {
     OrZero,
     OrNil,
 
+    // ── English binding keywords (aliases for 定/设) ─────────
+    /// `let` — immutable binding (English alias for 定)
+    Let,
+    /// `var` — mutable binding (English alias for 设)
+    Var,
+
     // ── Reserved Chinese keywords ────────────────────────────
     /// 定 — immutable variable binding
     Ding,
