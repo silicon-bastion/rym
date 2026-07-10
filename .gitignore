@@ -1,0 +1,8 @@
+# 编译产物
+*.o
+*.s
+*.out
+/compiler/build/
+
+# macOS
+.DS_Store
