@@ -238,11 +238,21 @@ impl CCodegen {
             }
 
             Op::Call { func: fname, args } => {
+                // `puts(slice)` — unpack fat-pointer [ptr, len] and call puts_slice.
+                if fname == "puts" && args.len() == 1 {
+                    let s = ssa_or_var(&args[0]);
+                    self.iline(&format!(
+                        "__rym_puts_slice((uintptr_t*)((uintptr_t*){s})[0], ((uintptr_t*){s})[1]);"
+                    ));
+                    if let Some(d) = dest {
+                        self.iline(&format!("{d} = 0;"));
+                    }
+                    return;
+                }
                 let arg_str = args.iter().map(|a| ssa_or_var(a)).collect::<Vec<_>>().join(", ");
                 let c_func = match fname.as_str() {
                     "print"   => "__rym_print",
                     "println" => "__rym_println",
-                    "puts"    => "__rym_puts",
                     "__main"  => "__rym_main",
                     other     => other,
                 };
