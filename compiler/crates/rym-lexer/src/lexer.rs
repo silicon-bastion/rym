@@ -258,6 +258,11 @@ impl<'src> Lexer<'src> {
             self.advance();
         }
         let text = &self.src[start..self.pos];
+        // `asm!` — the `!` is part of the macro-call sigil, consumed here.
+        if text == "asm" && self.current() == Some('!') {
+            self.advance();
+            return Ok(Token::new(TokenKind::AsmBang, start, self.pos));
+        }
         let kind = Self::keyword(text);
         Ok(Token::new(kind, start, self.pos))
     }

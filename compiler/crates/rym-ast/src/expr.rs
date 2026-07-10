@@ -91,6 +91,9 @@ pub enum ExprKind {
     /// Allocation call: `alloc.alloc(T, n)` — desugared from method syntax.
     AllocCall { allocator: Box<Expr>, elem_ty: Ty, count: Box<Expr> },
 
+    /// Inline assembly: `asm!("template", arg0, arg1, ...)` — base ring only.
+    Asm { template: String, args: Vec<Expr> },
+
     /// Type cast: `x as u64`
     Cast {
         expr: Box<Expr>,

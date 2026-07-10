@@ -35,6 +35,9 @@ pub enum SemaError {
 
     #[error("allocator parameter missing in function '{name}' that allocates")]
     MissingAllocator { name: String, span: Span },
+
+    #[error("asm! is only allowed in 'base' ring files")]
+    AsmInSafeRing { span: Span },
 }
 
 impl SemaError {
@@ -51,6 +54,7 @@ impl SemaError {
             SemaError::PipeOwnershipConflict  { span, .. } => *span,
             SemaError::OrReturnNonResult      { span, .. } => *span,
             SemaError::MissingAllocator       { span, .. } => *span,
+            SemaError::AsmInSafeRing          { span, .. } => *span,
         }
     }
 }

@@ -163,6 +163,10 @@ pub enum Op {
     /// `alloc.alloc(T, count)` — returns pointer to heap memory.
     AllocCall { allocator: String, elem_ty: IrTy, count: String },
 
+    /// Inline assembly: `asm!("template", arg0, arg1, ...)` — base ring only.
+    /// `{0}`, `{1}`, … in the template are replaced by the corresponding arg SSA names.
+    Asm { template: String, args: Vec<String> },
+
     Nop,
 }
 

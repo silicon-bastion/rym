@@ -1,5 +1,5 @@
 use rym_ast::{
-    SourceFile,
+    Ring, SourceFile,
     expr::{Expr, ExprKind, OwnershipMode, ResultVariant, BinOp},
     item::{FnDef, Item, ItemKind},
     stmt::{Stmt, StmtKind},
@@ -13,16 +13,18 @@ use crate::ownership;
 pub struct TyChecker {
     scope: Scope,
     errors: Vec<SemaError>,
+    ring: Ring,
 }
 
 impl TyChecker {
     pub fn new() -> Self {
-        Self { scope: Scope::new(), errors: Vec::new() }
+        Self { scope: Scope::new(), errors: Vec::new(), ring: Ring::Safe }
     }
 
     /// Run semantic analysis on a parsed source file.
     /// Returns all collected errors (empty = success).
     pub fn check(&mut self, file: &SourceFile) -> Vec<SemaError> {
+        self.ring = file.ring.clone();
         // Pass 1: register all top-level fn signatures so forward calls work.
         for item in &file.def_zone {
             self.register_item(item);
@@ -509,6 +511,13 @@ impl TyChecker {
                     arm_ty = self.infer_expr(&arm.body);
                 }
                 arm_ty
+            }
+            ExprKind::Asm { args, .. } => {
+                if self.ring != Ring::Base {
+                    self.errors.push(SemaError::AsmInSafeRing { span: expr.span });
+                }
+                for arg in args { self.infer_expr(arg); }
+                ResolvedTy::Void
             }
         }
     }

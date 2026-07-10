@@ -365,6 +365,15 @@ impl Codegen {
                 }
             }
 
+            Op::Asm { template, args } => {
+                // Substitute {0}, {1}, … with the register names of the corresponding SSA values.
+                let mut tpl = template.clone();
+                for (i, arg) in args.iter().enumerate() {
+                    let reg = ra.get(arg, &mut self.output);
+                    tpl = tpl.replace(&format!("{{{i}}}"), &reg);
+                }
+                writeln!(self.output, "\t{tpl}").unwrap();
+            }
             Op::Nop => {
                 writeln!(self.output, "\tnop").unwrap();
             }

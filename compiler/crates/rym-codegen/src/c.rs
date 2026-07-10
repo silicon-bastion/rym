@@ -446,6 +446,14 @@ impl CCodegen {
                 }
             }
 
+            Op::Asm { template, args } => {
+                // Substitute {0}, {1}, … with the corresponding SSA variable names.
+                let mut tpl = template.clone();
+                for (i, arg) in args.iter().enumerate() {
+                    tpl = tpl.replace(&format!("{{{i}}}"), &ssa_or_var(arg));
+                }
+                self.iline(&format!("__asm__ volatile(\"{tpl}\");"));
+            }
             Op::Nop => {
                 self.iline("/* nop */");
             }

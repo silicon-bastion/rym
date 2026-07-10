@@ -739,6 +739,12 @@ impl Lowerer {
                 self.start_block(merge_label);
                 result_dest
             }
+            ExprKind::Asm { template, args } => {
+                let lowered: Vec<String> = args.iter().map(|a| self.lower_expr(a)).collect();
+                let dest = self.fresh_name();
+                self.emit(Some(dest.clone()), Op::Asm { template: template.clone(), args: lowered }, span);
+                dest
+            }
         }
     }
 

@@ -560,6 +560,18 @@ impl Parser {
                 }
                 Ok(Expr { kind: ExprKind::Ident(name), span })
             }
+            TokenKind::AsmBang => {
+                self.advance();
+                self.expect(TokenKind::LParen)?;
+                let template = self.expect_str()?;
+                let mut args = Vec::new();
+                while self.eat(TokenKind::Comma) {
+                    args.push(self.parse_expr()?);
+                }
+                self.expect(TokenKind::RParen)?;
+                let end = self.span().start;
+                Ok(Expr { kind: ExprKind::Asm { template, args }, span: Span::new(span.start, end) })
+            }
             TokenKind::LBracket => self.parse_array_or_matrix(),
             TokenKind::If => self.parse_if(),
             TokenKind::Match => self.parse_match(),
